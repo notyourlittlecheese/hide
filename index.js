@@ -1012,6 +1012,31 @@ const saveSettingsAutoDebounced = debounce(() => {
     }
 }, 800);
 
+const HIDE_HELPER_AUTO_FLAG = 'hideHelperAutoHidden';
+
+function isHideHelperAutoHidden(msg) {
+    return msg?.extra?.[HIDE_HELPER_AUTO_FLAG] === true;
+}
+
+function isManuallyHidden(msg) {
+    return msg?.is_system === true && !isHideHelperAutoHidden(msg);
+}
+
+function markAutoHidden(msg) {
+    if (!msg) return;
+    msg.extra = msg.extra || {};
+    msg.extra[HIDE_HELPER_AUTO_FLAG] = true;
+    msg.is_system = true;
+}
+
+function clearAutoHidden(msg) {
+    if (!msg) return;
+    if (msg.extra) {
+        delete msg.extra[HIDE_HELPER_AUTO_FLAG];
+    }
+    msg.is_system = false;
+}
+
 // 检查是否应该执行隐藏/取消隐藏操作
 function shouldProcessHiding() {
     Logger.debug('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -1062,130 +1087,8 @@ function shouldProcessHiding() {
 // 增量隐藏检查
 async function runIncrementalHideCheck() {
     Logger.debug('');
-    Logger.debug('🔄🔄🔄【增量隐藏检查】开始 🔄🔄🔄');
-
-    if (!shouldProcessHiding()) {
-        Logger.debug('【增量隐藏检查】⛔ shouldProcessHiding 返回 false，跳过增量检查');
-        Logger.debug('🔄🔄🔄【增量隐藏检查】结束（跳过）🔄🔄🔄');
-        Logger.debug('');
-        return;
-    }
-
-    const startTime = performance.now();
-    const context = getContextOptimized();
-    if (!context || !context.chat) {
-        Logger.debug('【增量隐藏检查】⛔ 上下文或聊天数据不可用，中止');
-        Logger.debug('🔄🔄🔄【增量隐藏检查】结束（数据不可用）🔄🔄🔄');
-        Logger.debug('');
-        return;
-    }
-
-    const chat = context.chat;
-    const currentChatLength = chat.length;
-    const settings = getCurrentHideSettings() || { hideLastN: 0, lastProcessedLength: 0, userConfigured: false };
-    const { hideLastN, lastProcessedLength = 0 } = settings;
-
-    Logger.debug(`【增量隐藏检查】📊 当前状态:`);
-    Logger.debug(`【增量隐藏检查】   - 当前聊天长度: ${currentChatLength}`);
-    Logger.debug(`【增量隐藏检查】   - 保留楼层数 N: ${hideLastN}`);
-    Logger.debug(`【增量隐藏检查】   - 上次处理长度: ${lastProcessedLength}`);
-    Logger.debug(`【增量隐藏检查】   - 用户已配置: ${settings.userConfigured}`);
-
-    if (currentChatLength === 0 || hideLastN <= 0) {
-        Logger.debug(`【增量隐藏检查】⛔ 聊天为空或 N 值无效，跳过`);
-        if (currentChatLength !== lastProcessedLength && settings.userConfigured) {
-            Logger.debug(`【增量隐藏检查】💾 长度变化 (${lastProcessedLength} -> ${currentChatLength})，保存设置`);
-            saveCurrentHideSettings(hideLastN);
-        }
-        Logger.debug('🔄🔄🔄【增量隐藏检查】结束（空聊天或无效N值）🔄🔄🔄');
-        Logger.debug('');
-        return;
-    }
-
-    if (currentChatLength <= lastProcessedLength) {
-        Logger.debug(`【增量隐藏检查】⛔ 聊天长度未增加 (${lastProcessedLength} -> ${currentChatLength})，跳过增量处理`);
-        if (currentChatLength < lastProcessedLength && settings.userConfigured) {
-            Logger.debug(`【增量隐藏检查】💾 聊天长度减少，保存设置`);
-            saveCurrentHideSettings(hideLastN);
-        }
-        Logger.debug('🔄🔄🔄【增量隐藏检查】结束（长度未增加）🔄🔄🔄');
-        Logger.debug('');
-        return;
-    }
-
-    // 计算可见范围
-    const targetVisibleStart = Math.max(0, currentChatLength - hideLastN);
-    const previousVisibleStart = lastProcessedLength > 0 ? Math.max(0, lastProcessedLength - hideLastN) : 0;
-
-    Logger.debug(`【增量隐藏检查】📐 可见范围计算:`);
-    Logger.debug(`【增量隐藏检查】   - 目标可见起点: ${targetVisibleStart} (索引 >= ${targetVisibleStart} 的消息将可见)`);
-    Logger.debug(`【增量隐藏检查】   - 上次可见起点: ${previousVisibleStart}`);
-    Logger.debug(`【增量隐藏检查】   - 需要检查的索引范围: [${previousVisibleStart}, ${targetVisibleStart})`);
-
-    if (targetVisibleStart > previousVisibleStart) {
-        const toHideIncrementally = [];
-        const startIndex = previousVisibleStart;
-        const endIndex = targetVisibleStart;
-
-        Logger.debug(`【增量隐藏检查】🔍 扫描消息 [${startIndex}, ${endIndex})...`);
-
-        for (let i = startIndex; i < endIndex; i++) {
-            if (chat[i]) {
-                if (chat[i].is_system !== true) {
-                    toHideIncrementally.push(i);
-                    Logger.debug(`【增量隐藏检查】   ✋ 消息 #${i} 标记为隐藏 (is_system: false -> true)`);
-                } else {
-                    Logger.debug(`【增量隐藏检查】   ⏭️  消息 #${i} 已是隐藏状态，跳过`);
-                }
-            } else {
-                Logger.debug(`【增量隐藏检查】   ❌ 消息 #${i} 不存在，跳过`);
-            }
-        }
-
-        if (toHideIncrementally.length > 0) {
-            Logger.debug(`【增量隐藏检查】🎯 准备隐藏 ${toHideIncrementally.length} 条消息: [${toHideIncrementally.join(', ')}]`);
-
-            // 更新数据
-            toHideIncrementally.forEach(idx => {
-                if (chat[idx]) {
-                    chat[idx].is_system = true;
-                }
-            });
-            Logger.debug(`【增量隐藏检查】✅ 聊天数组数据已更新`);
-
-            // 更新 DOM
-            try {
-                const hideSelector = toHideIncrementally.map(id => `.mes[mesid="${id}"]`).join(',');
-                if (hideSelector) {
-                    $(hideSelector).attr('is_system', 'true');
-                    Logger.debug(`【增量隐藏检查】✅ DOM 更新完成: ${hideSelector}`);
-                }
-            } catch (error) {
-                Logger.error('【增量隐藏检查】❌ DOM 更新失败:', error);
-            }
-
-            Logger.debug(`【增量隐藏检查】💾 保存设置`);
-            saveCurrentHideSettings(hideLastN);
-
-            const elapsed = (performance.now() - startTime).toFixed(2);
-            Logger.debug(`【增量隐藏检查】✨ 增量隐藏完成！隐藏了 ${toHideIncrementally.length} 条消息，耗时 ${elapsed}ms`);
-
-        } else {
-            Logger.debug(`【增量隐藏检查】ℹ️  范围内无需隐藏的消息`);
-            if (settings.lastProcessedLength !== currentChatLength && settings.userConfigured) {
-                Logger.debug(`【增量隐藏检查】💾 保存设置`);
-                saveCurrentHideSettings(hideLastN);
-            }
-        }
-    } else {
-        Logger.debug(`【增量隐藏检查】ℹ️  可见起点未前进 (targetVisibleStart=${targetVisibleStart} <= previousVisibleStart=${previousVisibleStart})`);
-        if (settings.lastProcessedLength !== currentChatLength && settings.userConfigured) {
-            Logger.debug(`【增量隐藏检查】💾 保存设置`);
-            saveCurrentHideSettings(hideLastN);
-        }
-    }
-
-    Logger.debug('🔄🔄🔄【增量隐藏检查】结束🔄🔄🔄');
+    Logger.debug('【增量隐藏检查】已改为调用全量检查，以支持跳过手动隐藏楼层');
+    await runFullHideCheck();
     Logger.debug('');
 }
 
@@ -1222,17 +1125,34 @@ async function runFullHideCheck() {
     Logger.debug(`【全量隐藏检查】   - 用户已配置: ${userConfigured}`);
     Logger.debug(`【全量隐藏检查】   - 上次处理长度: ${lastProcessedLength}`);
 
-    // 计算可见起点
-    const visibleStart = hideLastN <= 0
-        ? 0
-        : (hideLastN >= currentChatLength
-            ? 0
-            : Math.max(0, currentChatLength - hideLastN));
+    if (currentChatLength === 0 || hideLastN <= 0) {
+        Logger.debug('【全量隐藏检查】⛔ 聊天为空或 N 值无效，跳过');
+        Logger.debug('🔍🔍🔍【全量隐藏检查】结束🔍🔍🔍');
+        Logger.debug('');
+        return;
+    }
+
+    const keepVisible = new Set();
+    let visibleCount = 0;
+
+    for (let i = currentChatLength - 1; i >= 0; i--) {
+        const msg = chat[i];
+        if (!msg) continue;
+
+        if (isManuallyHidden(msg)) {
+            Logger.debug(`【全量隐藏检查】   ⏭️  索引 ${i}: 手动隐藏，跳过计数`);
+            continue;
+        }
+
+        if (visibleCount < hideLastN) {
+            keepVisible.add(i);
+            visibleCount++;
+        }
+    }
 
     Logger.debug(`【全量隐藏检查】📐 可见范围计算:`);
-    Logger.debug(`【全量隐藏检查】   - 可见起点索引: ${visibleStart}`);
-    Logger.debug(`【全量隐藏检查】   - 可见消息范围: [${visibleStart}, ${currentChatLength}) (共 ${currentChatLength - visibleStart} 条)`);
-    Logger.debug(`【全量隐藏检查】   - 隐藏消息范围: [0, ${visibleStart}) (共 ${visibleStart} 条)`);
+    Logger.debug(`【全量隐藏检查】   - 可见集合: [${Array.from(keepVisible).sort((a, b) => a - b).join(', ') || '无'}]`);
+    Logger.debug(`【全量隐藏检查】   - 已跳过手动隐藏消息，保留最近 ${visibleCount} 条非手动隐藏消息`);
 
     const toHide = [];
     const toShow = [];
@@ -1247,23 +1167,26 @@ async function runFullHideCheck() {
             continue;
         }
 
-        const isCurrentlyHidden = msg.is_system === true;
-        const shouldBeHidden = i < visibleStart;
+        if (isManuallyHidden(msg)) {
+            Logger.debug(`【全量隐藏检查】   ⏭️  索引 ${i}: 手动隐藏，保持隐藏`);
+            continue;
+        }
 
-        if (shouldBeHidden && !isCurrentlyHidden) {
-            // 应该隐藏但当前未隐藏 → 需要隐藏
-            msg.is_system = true;
+        const shouldBeVisible = keepVisible.has(i);
+        const isCurrentlyHidden = msg.is_system === true;
+        const autoHidden = isHideHelperAutoHidden(msg);
+
+        if (!shouldBeVisible && !isCurrentlyHidden) {
+            markAutoHidden(msg);
             toHide.push(i);
             changed = true;
-            Logger.debug(`【全量隐藏检查】   ✋ 索引 ${i}: 隐藏 (is_system: false -> true)`);
-        } else if (!shouldBeHidden && isCurrentlyHidden) {
-            // 应该显示但当前已隐藏 → 需要显示
-            msg.is_system = false;
+            Logger.debug(`【全量隐藏检查】   ✋ 索引 ${i}: 插件自动隐藏`);
+        } else if (shouldBeVisible && autoHidden) {
+            clearAutoHidden(msg);
             toShow.push(i);
             changed = true;
-            Logger.debug(`【全量隐藏检查】   👁️  索引 ${i}: 显示 (is_system: true -> false)`);
+            Logger.debug(`【全量隐藏检查】   👁️  索引 ${i}: 取消插件自动隐藏`);
         } else {
-            // 状态正确，无需更改
             const status = isCurrentlyHidden ? '已隐藏' : '已显示';
             Logger.debug(`【全量隐藏检查】   ✓  索引 ${i}: ${status} (无需更改)`);
         }
@@ -1337,6 +1260,10 @@ async function unhideAllMessages(isFromInputZero = false) {
         chat.forEach(msg => {
             if (msg.is_system) {
                 msg.is_system = false;
+            }
+
+            if (msg.extra) {
+                delete msg.extra[HIDE_HELPER_AUTO_FLAG];
             }
         });
 
@@ -2467,8 +2394,8 @@ function setupEventListeners() {
         Logger.debug(`📨【事件】   当前聊天长度: ${chatLength}`);
 
         if (extension_settings[extensionName]?.enabled) {
-            Logger.debug('📨【事件】插件已启用，100ms 后执行增量隐藏检查');
-            setTimeout(() => runIncrementalHideCheck(), 100);
+            Logger.debug('📨【事件】插件已启用，100ms 后执行全量隐藏检查');
+            setTimeout(() => runFullHideCheckDebounced(), 100);
         } else {
             Logger.debug('📨【事件】插件未启用，跳过隐藏检查');
         }
@@ -2628,30 +2555,50 @@ jQuery(async () => {
 // 兜底拦截：在 API 请求前硬性截断 chat 数组，确保只有最近 N 条消息被发送
 globalThis.HideHelper_interceptGeneration = function (chat) {
     const settings = extension_settings[extensionName];
+
     if (!settings?.enabled) return;
 
     const autoHideEnabled = settings.autoHideEnabled ?? true;
     if (!autoHideEnabled) return;
 
     const hideSettings = getCurrentHideSettings();
-    if (!hideSettings?.userConfigured || !hideSettings.hideLastN || hideSettings.hideLastN <= 0) return;
+
+    if (!hideSettings?.userConfigured || !hideSettings.hideLastN || hideSettings.hideLastN <= 0) {
+        return;
+    }
+
+    if (!Array.isArray(chat) || chat.length === 0) {
+        return;
+    }
 
     const originalLength = chat.length;
     const targetLength = hideSettings.hideLastN;
 
-    if (originalLength > targetLength) {
-        const removedCount = originalLength - targetLength;
-        Logger.warn('');
-        Logger.warn('🛡️【请求拦截】触发兜底保护机制');
-        Logger.warn(`🛡️【请求拦截】⚠️ 检测到 chat 数组长度 (${originalLength}) 超过保留值 (${targetLength})`);
-        Logger.warn(`🛡️【请求拦截】🔪 强制移除前 ${removedCount} 条消息，确保只发送最新 ${targetLength} 条`);
+    const kept = [];
 
-        while (chat.length > targetLength) {
-            chat.shift();
+    for (let i = chat.length - 1; i >= 0; i--) {
+        const msg = chat[i];
+
+        if (!msg) continue;
+
+        if (msg.is_system === true) {
+            continue;
         }
 
-        Logger.warn(`🛡️【请求拦截】✅ 拦截完成，chat 数组已从 ${originalLength} 截断至 ${chat.length}`);
-        Logger.warn(`🛡️【请求拦截】💡 这说明前面的隐藏机制可能失效，此拦截作为最后一道防线`);
+        kept.unshift(msg);
+
+        if (kept.length >= targetLength) {
+            break;
+        }
+    }
+
+    if (chat.length !== kept.length) {
+        Logger.warn('');
+        Logger.warn('🛡️【请求拦截】触发兜底保护机制');
+        Logger.warn(`🛡️【请求拦截】原始 chat 长度: ${originalLength}`);
+        Logger.warn(`🛡️【请求拦截】保留最近 ${targetLength} 条非隐藏消息，实际保留 ${kept.length} 条`);
+        chat.splice(0, chat.length, ...kept);
+        Logger.warn('🛡️【请求拦截】✅ 已按“最近 N 条非隐藏消息”重建发送上下文');
         Logger.warn('');
     }
 };
