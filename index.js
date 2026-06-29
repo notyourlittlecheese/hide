@@ -1013,9 +1013,14 @@ const saveSettingsAutoDebounced = debounce(() => {
 }, 800);
 
 const HIDE_HELPER_AUTO_FLAG = 'hideHelperAutoHidden';
+const HIDE_HELPER_MANUAL_SHOW_FLAG = 'hideHelperManuallyShown';
 
 function isHideHelperAutoHidden(msg) {
     return msg?.extra?.[HIDE_HELPER_AUTO_FLAG] === true;
+}
+
+function isManuallyShown(msg) {
+    return msg?.is_system !== true && msg?.extra?.[HIDE_HELPER_MANUAL_SHOW_FLAG] === true;
 }
 
 function isManuallyHidden(msg) {
@@ -1034,6 +1039,14 @@ function clearAutoHidden(msg) {
     if (msg.extra) {
         delete msg.extra[HIDE_HELPER_AUTO_FLAG];
     }
+    msg.is_system = false;
+}
+
+function markManuallyShown(msg) {
+    if (!msg) return;
+    msg.extra = msg.extra || {};
+    delete msg.extra[HIDE_HELPER_AUTO_FLAG];
+    msg.extra[HIDE_HELPER_MANUAL_SHOW_FLAG] = true;
     msg.is_system = false;
 }
 
@@ -1115,6 +1128,12 @@ async function runFullHideCheck() {
 
     const chat = context.chat;
     const currentChatLength = chat.length;
+
+    for (const msg of chat) {
+        if (msg && isHideHelperAutoHidden(msg) && msg.is_system !== true) {
+            markManuallyShown(msg);
+        }
+    }
     Logger.debug(`【全量隐藏检查】📊 当前聊天长度: ${currentChatLength}`);
 
     const settings = getCurrentHideSettings() || { hideLastN: 0, lastProcessedLength: 0, userConfigured: false };
@@ -1176,7 +1195,7 @@ async function runFullHideCheck() {
         const isCurrentlyHidden = msg.is_system === true;
         const autoHidden = isHideHelperAutoHidden(msg);
 
-        if (!shouldBeVisible && !isCurrentlyHidden) {
+        if (!shouldBeVisible && !isCurrentlyHidden && !isManuallyShown(msg)) {
             markAutoHidden(msg);
             toHide.push(i);
             changed = true;
@@ -1264,6 +1283,7 @@ async function unhideAllMessages(isFromInputZero = false) {
 
             if (msg.extra) {
                 delete msg.extra[HIDE_HELPER_AUTO_FLAG];
+                delete msg.extra[HIDE_HELPER_MANUAL_SHOW_FLAG];
             }
         });
 
