@@ -2424,6 +2424,28 @@ function setupEventListeners() {
     eventSource.on(event_types.MESSAGE_RECEIVED, () => handleNewMessage(event_types.MESSAGE_RECEIVED));
     eventSource.on(event_types.MESSAGE_SENT, () => handleNewMessage(event_types.MESSAGE_SENT));
 
+    const handleMessageChanged = (eventType) => {
+        Logger.debug('');
+        Logger.debug(`✏️【事件】${eventType} - 消息内容已变更`);
+        if (extension_settings[extensionName]?.enabled) {
+            Logger.debug('✏️【事件】插件已启用，100ms 后执行全量隐藏检查');
+            setTimeout(() => runFullHideCheckDebounced(), 100);
+        } else {
+            Logger.debug('✏️【事件】插件未启用，跳过隐藏检查');
+        }
+        Logger.debug('');
+    };
+    [
+        'MESSAGE_EDITED',
+        'MESSAGE_UPDATED',
+        'MESSAGE_SWIPED',
+    ].forEach((eventName) => {
+        const eventType = event_types[eventName];
+        if (eventType) {
+            eventSource.on(eventType, () => handleMessageChanged(eventType));
+        }
+    });
+
     eventSource.on(event_types.MESSAGE_DELETED, () => {
         Logger.debug('');
         Logger.debug('🗑️【事件】MESSAGE_DELETED - 消息已删除');
