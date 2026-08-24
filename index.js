@@ -1050,6 +1050,11 @@ function markManuallyShown(msg) {
     msg.is_system = false;
 }
 
+function clearManuallyShown(msg) {
+    if (!msg?.extra) return;
+    delete msg.extra[HIDE_HELPER_MANUAL_SHOW_FLAG];
+}
+
 // 检查是否应该执行隐藏/取消隐藏操作
 function shouldProcessHiding() {
     Logger.debug('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -1129,11 +1134,6 @@ async function runFullHideCheck() {
     const chat = context.chat;
     const currentChatLength = chat.length;
 
-    for (const msg of chat) {
-        if (msg && isHideHelperAutoHidden(msg) && msg.is_system !== true) {
-            markManuallyShown(msg);
-        }
-    }
     Logger.debug(`【全量隐藏检查】📊 当前聊天长度: ${currentChatLength}`);
 
     const settings = getCurrentHideSettings() || { hideLastN: 0, lastProcessedLength: 0, userConfigured: false };
@@ -2423,6 +2423,28 @@ function setupEventListeners() {
     };
     eventSource.on(event_types.MESSAGE_RECEIVED, () => handleNewMessage(event_types.MESSAGE_RECEIVED));
     eventSource.on(event_types.MESSAGE_SENT, () => handleNewMessage(event_types.MESSAGE_SENT));
+
+    $(document).off('click.hideHelperManualShow').on('click.hideHelperManualShow', '.mes_unhide', function() {
+        const mesId = Number($(this).closest('.mes').attr('mesid'));
+        const context = getContextOptimized();
+        const msg = context?.chat?.[mesId];
+
+        if (msg && isHideHelperAutoHidden(msg)) {
+            markManuallyShown(msg);
+            Logger.debug(`👁️【手动取消隐藏】索引 ${mesId}: 已记录为手动显示，自动隐藏将跳过该楼层`);
+        }
+    });
+
+    $(document).off('click.hideHelperManualHide').on('click.hideHelperManualHide', '.mes_hide', function() {
+        const mesId = Number($(this).closest('.mes').attr('mesid'));
+        const context = getContextOptimized();
+        const msg = context?.chat?.[mesId];
+
+        if (isManuallyShown(msg)) {
+            clearManuallyShown(msg);
+            Logger.debug(`🙈【手动隐藏】索引 ${mesId}: 已清除手动显示记录`);
+        }
+    });
 
     const handleMessageChanged = (eventType) => {
         Logger.debug('');
