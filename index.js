@@ -995,6 +995,27 @@ function debounce(fn, delay) {
 
 // 防抖版本的全量检查
 const runFullHideCheckDebounced = debounce(runFullHideCheck, 200);
+const scheduledHideCheckTimers = new Map();
+
+function scheduleFullHideCheck(reason, delays = [100]) {
+    if (!extension_settings[extensionName]?.enabled) {
+        Logger.debug(`【隐藏检查调度】${reason}: 插件未启用，跳过`);
+        return;
+    }
+
+    delays.forEach((delay) => {
+        if (scheduledHideCheckTimers.has(delay)) {
+            clearTimeout(scheduledHideCheckTimers.get(delay));
+        }
+
+        const timer = setTimeout(() => {
+            scheduledHideCheckTimers.delete(delay);
+            Logger.debug(`【隐藏检查调度】${reason}: 延迟 ${delay}ms 执行全量隐藏检查`);
+            runFullHideCheckDebounced();
+        }, delay);
+        scheduledHideCheckTimers.set(delay, timer);
+    });
+}
 
 // 自动保存防抖
 const saveSettingsAutoDebounced = debounce(() => {
@@ -2443,12 +2464,7 @@ function setupEventListeners() {
         Logger.debug(`📨【事件】${eventType} - 新消息事件`);
         Logger.debug(`📨【事件】   当前聊天长度: ${chatLength}`);
 
-        if (extension_settings[extensionName]?.enabled) {
-            Logger.debug('📨【事件】插件已启用，100ms 后执行全量隐藏检查');
-            setTimeout(() => runFullHideCheckDebounced(), 100);
-        } else {
-            Logger.debug('📨【事件】插件未启用，跳过隐藏检查');
-        }
+        scheduleFullHideCheck(eventType, [100, 500]);
         Logger.debug('');
     };
     eventSource.on(event_types.MESSAGE_RECEIVED, () => handleNewMessage(event_types.MESSAGE_RECEIVED));
@@ -2479,12 +2495,7 @@ function setupEventListeners() {
     const handleMessageChanged = (eventType) => {
         Logger.debug('');
         Logger.debug(`✏️【事件】${eventType} - 消息内容已变更`);
-        if (extension_settings[extensionName]?.enabled) {
-            Logger.debug('✏️【事件】插件已启用，100ms 后执行全量隐藏检查');
-            setTimeout(() => runFullHideCheckDebounced(), 100);
-        } else {
-            Logger.debug('✏️【事件】插件未启用，跳过隐藏检查');
-        }
+        scheduleFullHideCheck(eventType, [100, 500, 1500]);
         Logger.debug('');
     };
     [
@@ -2501,12 +2512,7 @@ function setupEventListeners() {
     eventSource.on(event_types.MESSAGE_DELETED, () => {
         Logger.debug('');
         Logger.debug('🗑️【事件】MESSAGE_DELETED - 消息已删除');
-        if (extension_settings[extensionName]?.enabled) {
-            Logger.debug('🗑️【事件】插件已启用，执行全量隐藏检查');
-            runFullHideCheckDebounced();
-        } else {
-            Logger.debug('🗑️【事件】插件未启用，跳过隐藏检查');
-        }
+        scheduleFullHideCheck(event_types.MESSAGE_DELETED, [100, 500]);
         Logger.debug('');
     });
 
@@ -2516,14 +2522,39 @@ function setupEventListeners() {
         Logger.debug('');
         Logger.debug('🏁【事件】GENERATION_ENDED - 生成已结束');
         // 运行一个完整的检查来纠正任何增量更新中可能出现的问题
-        if (extension_settings[extensionName]?.enabled) {
-            Logger.debug('🏁【事件】插件已启用，执行全量隐藏检查确保一致性');
-            runFullHideCheckDebounced();
-        } else {
-            Logger.debug('🏁【事件】插件未启用，跳过隐藏检查');
-        }
+        scheduleFullHideCheck(streamEndEvent, [100, 500]);
         Logger.debug('');
     });
+
+    const chatElement = document.getElementById('chat');
+    if (chatElement && typeof MutationObserver !== 'undefined') {
+        const chatObserver = new MutationObserver((mutations) => {
+            const shouldResync = mutations.some((mutation) => {
+                if (mutation.type === 'childList') {
+                    return Array.from(mutation.addedNodes).some(node => node.nodeType === Node.ELEMENT_NODE)
+                        || Array.from(mutation.removedNodes).some(node => node.nodeType === Node.ELEMENT_NODE);
+                }
+
+                if (mutation.type === 'attributes') {
+                    return mutation.attributeName === 'is_system' || mutation.target?.classList?.contains('mes');
+                }
+
+                return false;
+            });
+
+            if (shouldResync) {
+                scheduleFullHideCheck('聊天 DOM 变化', [100, 500, 1500]);
+            }
+        });
+
+        chatObserver.observe(chatElement, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['is_system', 'class'],
+        });
+        Logger.debug('🔭【事件】已启用聊天 DOM 变化观察器');
+    }
 
     // ============================================================
     // 防止操作弹窗时导致背后的 ST 扩展面板关闭
