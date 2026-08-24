@@ -1014,13 +1014,16 @@ const saveSettingsAutoDebounced = debounce(() => {
 
 const HIDE_HELPER_AUTO_FLAG = 'hideHelperAutoHidden';
 const HIDE_HELPER_MANUAL_SHOW_FLAG = 'hideHelperManuallyShown';
+const HIDE_HELPER_MANUAL_SHOW_CLICK_FLAG = 'hideHelperManuallyShownByClick';
 
 function isHideHelperAutoHidden(msg) {
     return msg?.extra?.[HIDE_HELPER_AUTO_FLAG] === true;
 }
 
 function isManuallyShown(msg) {
-    return msg?.is_system !== true && msg?.extra?.[HIDE_HELPER_MANUAL_SHOW_FLAG] === true;
+    return msg?.is_system !== true
+        && msg?.extra?.[HIDE_HELPER_MANUAL_SHOW_FLAG] === true
+        && msg?.extra?.[HIDE_HELPER_MANUAL_SHOW_CLICK_FLAG] === true;
 }
 
 function isManuallyHidden(msg) {
@@ -1047,12 +1050,14 @@ function markManuallyShown(msg) {
     msg.extra = msg.extra || {};
     delete msg.extra[HIDE_HELPER_AUTO_FLAG];
     msg.extra[HIDE_HELPER_MANUAL_SHOW_FLAG] = true;
+    msg.extra[HIDE_HELPER_MANUAL_SHOW_CLICK_FLAG] = true;
     msg.is_system = false;
 }
 
 function clearManuallyShown(msg) {
     if (!msg?.extra) return;
     delete msg.extra[HIDE_HELPER_MANUAL_SHOW_FLAG];
+    delete msg.extra[HIDE_HELPER_MANUAL_SHOW_CLICK_FLAG];
 }
 
 // 检查是否应该执行隐藏/取消隐藏操作
@@ -1134,6 +1139,13 @@ async function runFullHideCheck() {
     const chat = context.chat;
     const currentChatLength = chat.length;
 
+    for (const msg of chat) {
+        if (msg?.extra?.[HIDE_HELPER_MANUAL_SHOW_FLAG] === true
+            && msg.extra[HIDE_HELPER_MANUAL_SHOW_CLICK_FLAG] !== true) {
+            clearManuallyShown(msg);
+        }
+    }
+
     Logger.debug(`【全量隐藏检查】📊 当前聊天长度: ${currentChatLength}`);
 
     const settings = getCurrentHideSettings() || { hideLastN: 0, lastProcessedLength: 0, userConfigured: false };
@@ -1186,7 +1198,14 @@ async function runFullHideCheck() {
             continue;
         }
 
+        const domHidden = $(`.mes[mesid="${i}"]`).attr('is_system') === 'true';
+
         if (isManuallyHidden(msg)) {
+            if (!domHidden) {
+                toHide.push(i);
+                changed = true;
+                Logger.debug(`【全量隐藏检查】   🔧 索引 ${i}: 手动隐藏，修正 DOM 为隐藏`);
+            }
             Logger.debug(`【全量隐藏检查】   ⏭️  索引 ${i}: 手动隐藏，保持隐藏`);
             continue;
         }
@@ -1195,16 +1214,26 @@ async function runFullHideCheck() {
         const isCurrentlyHidden = msg.is_system === true;
         const autoHidden = isHideHelperAutoHidden(msg);
 
-        if (!shouldBeVisible && !isCurrentlyHidden && !isManuallyShown(msg)) {
-            markAutoHidden(msg);
-            toHide.push(i);
-            changed = true;
-            Logger.debug(`【全量隐藏检查】   ✋ 索引 ${i}: 插件自动隐藏`);
+        if (!shouldBeVisible && !isManuallyShown(msg)) {
+            if (!isCurrentlyHidden) {
+                markAutoHidden(msg);
+                changed = true;
+                Logger.debug(`【全量隐藏检查】   ✋ 索引 ${i}: 插件自动隐藏`);
+            }
+            if (!domHidden) {
+                toHide.push(i);
+                changed = true;
+                Logger.debug(`【全量隐藏检查】   🔧 索引 ${i}: 修正 DOM 为隐藏`);
+            }
         } else if (shouldBeVisible && autoHidden) {
             clearAutoHidden(msg);
             toShow.push(i);
             changed = true;
             Logger.debug(`【全量隐藏检查】   👁️  索引 ${i}: 取消插件自动隐藏`);
+        } else if ((shouldBeVisible || isManuallyShown(msg)) && domHidden && !isCurrentlyHidden) {
+            toShow.push(i);
+            changed = true;
+            Logger.debug(`【全量隐藏检查】   🔧 索引 ${i}: 修正 DOM 为显示`);
         } else {
             const status = isCurrentlyHidden ? '已隐藏' : '已显示';
             Logger.debug(`【全量隐藏检查】   ✓  索引 ${i}: ${status} (无需更改)`);
@@ -1284,6 +1313,7 @@ async function unhideAllMessages(isFromInputZero = false) {
             if (msg.extra) {
                 delete msg.extra[HIDE_HELPER_AUTO_FLAG];
                 delete msg.extra[HIDE_HELPER_MANUAL_SHOW_FLAG];
+                delete msg.extra[HIDE_HELPER_MANUAL_SHOW_CLICK_FLAG];
             }
         });
 
