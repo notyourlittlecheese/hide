@@ -1017,6 +1017,10 @@ function scheduleFullHideCheck(reason, delays = [100]) {
     });
 }
 
+function isMessageEditActive() {
+    return $('.mes_edit_buttons:visible, .mes_text textarea:visible, textarea.edit_textarea:visible').length > 0;
+}
+
 // 自动保存防抖
 const saveSettingsAutoDebounced = debounce(() => {
     const val = parseInt($('#hide-last-n').val());
@@ -1043,8 +1047,7 @@ function isHideHelperAutoHidden(msg) {
 
 function isManuallyShown(msg) {
     return msg?.is_system !== true
-        && msg?.extra?.[HIDE_HELPER_MANUAL_SHOW_FLAG] === true
-        && msg?.extra?.[HIDE_HELPER_MANUAL_SHOW_CLICK_FLAG] === true;
+        && msg?.extra?.[HIDE_HELPER_MANUAL_SHOW_FLAG] === true;
 }
 
 function isManuallyHidden(msg) {
@@ -1160,11 +1163,12 @@ async function runFullHideCheck() {
     const chat = context.chat;
     const currentChatLength = chat.length;
 
-    for (const msg of chat) {
-        if (msg?.extra?.[HIDE_HELPER_MANUAL_SHOW_FLAG] === true
-            && msg.extra[HIDE_HELPER_MANUAL_SHOW_CLICK_FLAG] !== true) {
-            clearManuallyShown(msg);
-        }
+    if (isMessageEditActive()) {
+        Logger.debug('【全量隐藏检查】⏳ 检测到消息仍处于编辑状态，延后同步以避免干扰 SillyTavern 编辑重绘');
+        scheduleFullHideCheck('消息编辑中，延后同步', [500, 1500]);
+        Logger.debug('🔍🔍🔍【全量隐藏检查】结束（等待编辑完成）🔍🔍🔍');
+        Logger.debug('');
+        return;
     }
 
     Logger.debug(`【全量隐藏检查】📊 当前聊天长度: ${currentChatLength}`);
@@ -2535,10 +2539,6 @@ function setupEventListeners() {
                         || Array.from(mutation.removedNodes).some(node => node.nodeType === Node.ELEMENT_NODE);
                 }
 
-                if (mutation.type === 'attributes') {
-                    return mutation.attributeName === 'is_system' || mutation.target?.classList?.contains('mes');
-                }
-
                 return false;
             });
 
@@ -2550,8 +2550,6 @@ function setupEventListeners() {
         chatObserver.observe(chatElement, {
             childList: true,
             subtree: true,
-            attributes: true,
-            attributeFilter: ['is_system', 'class'],
         });
         Logger.debug('🔭【事件】已启用聊天 DOM 变化观察器');
     }
