@@ -269,8 +269,10 @@ function centerPopup($popup) {
     // 通过获取实际窗口宽高并减去弹窗实际宽高，算出绝对安全的像素坐标
 
     const windowWidth = $(window).width();
-    const windowHeight = $(window).height();
+    const viewport = window.visualViewport;
+    const windowHeight = viewport?.height || $(window).height();
     const popupWidth = $popup.outerWidth();
+    $popup.css('max-height', Math.max(240, windowHeight - 20) + 'px');
     const popupHeight = $popup.outerHeight();
 
     // 动态计算居中坐标
@@ -287,6 +289,21 @@ function centerPopup($popup) {
         transform: 'none', // 清除可能存在的 CSS 缩放和平移干扰
         margin: '0'
     });
+}
+
+function resetPopupScroll(targetTab = null) {
+    const $content = $('#hide-helper-popup .popup-tabs-content');
+    $content.scrollTop(0);
+
+    if (targetTab) {
+        $(`.tab-panel[data-tab="${targetTab}"]`).scrollTop(0);
+    } else {
+        $('#hide-helper-popup .tab-panel').scrollTop(0);
+    }
+}
+
+function handleHideHelperViewportResize() {
+    centerPopup($('#hide-helper-popup'));
 }
 
 // 获取优化的上下文
@@ -1985,9 +2002,12 @@ function setupEventListeners() {
         const $popup = $('#hide-helper-popup');
         const $backdrop = $('#hide-helper-backdrop');
         $backdrop.show();
-        $popup.show();
+        $popup.css('display', 'flex');
+        resetPopupScroll(lastActiveTab);
         centerPopup($popup);
         $(window).off('resize.hideHelperMain').on('resize.hideHelperMain', () => centerPopup($popup));
+        window.visualViewport?.removeEventListener('resize', handleHideHelperViewportResize);
+        window.visualViewport?.addEventListener('resize', handleHideHelperViewportResize);
 
         // 恢复日志UI开关状态
         const logUiVisible = extension_settings[extensionName].logUiVisible || false;
@@ -2068,6 +2088,7 @@ function setupEventListeners() {
         $('#hide-helper-popup').hide();
         $('#hide-helper-backdrop').hide();
         $(window).off('resize.hideHelperMain');
+        window.visualViewport?.removeEventListener('resize', handleHideHelperViewportResize);
 
         Logger.debug(`【关闭弹窗】✅ 弹窗已关闭`);
         Logger.debug('🚪🚪🚪【关闭弹窗】结束🚪🚪🚪');
@@ -2268,6 +2289,7 @@ function setupEventListeners() {
         }
 
         // 面板内容切换极可能导致高度发生变化，重新计算定位确保依然完美居中
+        resetPopupScroll(targetTab);
         centerPopup($('#hide-helper-popup'));
     });
 

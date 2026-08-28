@@ -146,10 +146,11 @@
 
 /* --- 弹窗通用样式 --- */
 .hide-helper-popup, .hide-helper-instructions-popup {
-    position: fixed; max-height: 90vh; width: 90%; max-width: 420px;
+    position: fixed; width: 90%; max-width: 420px; max-height: calc(100dvh - 20px);
     background: var(--hh-background-popup); border: 1px solid var(--hh-border-color);
     border-radius: 12px; z-index: 9999; padding: 20px 25px;
     box-shadow: 0 4px 20px var(--hh-color-black-shadow); display: none; flex-direction: column; gap: 20px;
+    box-sizing: border-box; overflow: hidden;
     backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); animation: hhFadeIn 0.3s ease-out;
 }
 @keyframes hhFadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
@@ -246,7 +247,13 @@
 
 #hide-helper-popup .popup-tabs-content .tab-panel { display: none !important; animation: hhFadeIn 0.3s ease-out !important; position: relative !important; box-sizing: border-box !important; }
 #hide-helper-popup .popup-tabs-content .tab-panel.active { display: block !important; }
-#hide-helper-popup .popup-tabs-content { max-height: 470px; overflow-y: auto; scrollbar-width: none !important; flex: 1 1 auto; }
+#hide-helper-popup .popup-tabs-content {
+    max-height: min(470px, calc(100dvh - 120px));
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: none !important;
+    flex: 1 1 auto;
+}
 #hide-helper-popup *::-webkit-scrollbar { display: none !important; }
 #hide-helper-popup * { scrollbar-width: none !important; }
 
