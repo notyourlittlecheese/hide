@@ -2066,8 +2066,6 @@ function setupEventListeners() {
         const $backdrop = $('#hide-helper-backdrop');
         $backdrop.show();
         $popup.show();
-        centerPopup($popup);
-        $(window).off('resize.hideHelperMain').on('resize.hideHelperMain', () => centerPopup($popup));
 
         // 恢复日志UI开关状态
         const logUiVisible = extension_settings[extensionName].logUiVisible || false;
@@ -2120,6 +2118,11 @@ function setupEventListeners() {
         Logger.debug(`【关闭弹窗】   - 解析后: ${val}`);
         Logger.debug(`【关闭弹窗】   - 是否有效: ${!isNaN(val) && val >= 0}`);
 
+        const autoHideChecked = $('#hide-auto-process-toggle').is(':checked');
+        extension_settings[extensionName].autoHideEnabled = autoHideChecked;
+        saveSettingsDebounced();
+        Logger.debug(`【关闭弹窗】💾 保持自动隐藏功能开关状态: ${autoHideChecked ? 'ON' : 'OFF'}`);
+
         if (!isNaN(val) && val >= 0) {
             Logger.debug(`【关闭弹窗】💾 立即保存隐藏设置，值=${val}`);
 
@@ -2147,12 +2150,19 @@ function setupEventListeners() {
 
         $('#hide-helper-popup').hide();
         $('#hide-helper-backdrop').hide();
-        $(window).off('resize.hideHelperMain');
 
         Logger.debug(`【关闭弹窗】✅ 弹窗已关闭`);
         Logger.debug('🚪🚪🚪【关闭弹窗】结束🚪🚪🚪');
         Logger.debug('');
     }
+
+    $('#hide-helper-popup').on('mousedown touchstart click wheel', function(e) {
+        e.stopPropagation();
+    });
+
+    $('#hide-helper-popup').on('input change keydown keyup', 'input, select, textarea, button', function(e) {
+        e.stopPropagation();
+    });
 
     $('#hide-helper-popup-close-icon').on('click', function() {
         Logger.debug('【事件】点击弹窗关闭图标');
@@ -2347,8 +2357,6 @@ function setupEventListeners() {
             forceRefreshTokenStats(); // 每次切换都触发模拟生成，确保拿到最新数据
         }
 
-        // 面板内容切换极可能导致高度发生变化，重新计算定位确保依然完美居中
-        centerPopup($('#hide-helper-popup'));
     });
 
     // --- 全局插件开关 ---
