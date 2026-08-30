@@ -23,7 +23,8 @@ const defaultSettings = {
     // 迁移标志
     migration_v1_complete: true,
     // 添加全局设置相关字段
-    useGlobalSettings: false,
+    useGlobalSettings: true,
+    global_mode_default_v1_complete: false,
     globalHideSettings: {
         hideLastN: null,
         lastProcessedLength: 0,
@@ -268,20 +269,25 @@ function centerPopup($popup) {
     // 解决移动端浏览器因视口高度变化导致的 CSS 居中定位失效问题
     // 通过获取实际窗口宽高并减去弹窗实际宽高，算出绝对安全的像素坐标
 
-    const windowWidth = $(window).width();
     const viewport = window.visualViewport;
-    const windowHeight = viewport?.height || $(window).height();
+    const viewportWidth = viewport?.width || document.documentElement.clientWidth || $(window).width();
+    const viewportHeight = viewport?.height || document.documentElement.clientHeight || $(window).height();
+    const viewportLeft = viewport?.offsetLeft || 0;
+    const viewportTop = viewport?.offsetTop || 0;
     const popupWidth = $popup.outerWidth();
-    $popup.css('max-height', Math.max(240, windowHeight - 20) + 'px');
+    $popup.css('max-height', Math.max(120, viewportHeight - 20) + 'px');
     const popupHeight = $popup.outerHeight();
 
-    // 动态计算居中坐标
-    let top = (windowHeight - popupHeight) / 2;
-    let left = (windowWidth - popupWidth) / 2;
+    // 手机地址栏、软键盘和页面缩放都会让 visualViewport 产生坐标偏移。
+    let top = viewportTop + (viewportHeight - popupHeight) / 2;
+    let left = viewportLeft + (viewportWidth - popupWidth) / 2;
 
-    // 安全边界防溢出（留出至少 10px 的边距，防止极小屏幕下跑偏到屏幕外）
-    top = Math.max(10, top);
-    left = Math.max(10, left);
+    const minTop = viewportTop + 10;
+    const minLeft = viewportLeft + 10;
+    const maxTop = viewportTop + viewportHeight - popupHeight - 10;
+    const maxLeft = viewportLeft + viewportWidth - popupWidth - 10;
+    top = Math.max(minTop, Math.min(top, maxTop));
+    left = Math.max(minLeft, Math.min(left, maxLeft));
 
     $popup.css({
         top: top + 'px',
@@ -304,6 +310,29 @@ function resetPopupScroll(targetTab = null) {
 
 function handleHideHelperViewportResize() {
     centerPopup($('#hide-helper-popup'));
+}
+
+function migrateDefaultHideModeToGlobal() {
+    const settings = extension_settings[extensionName];
+    if (!settings || settings.global_mode_default_v1_complete) return;
+
+    const globalSettings = settings.globalHideSettings || { ...defaultSettings.globalHideSettings };
+    if (!globalSettings.hideLastN || globalSettings.hideLastN <= 0) {
+        const entityId = getCurrentEntityId();
+        const entitySettings = entityId ? settings.settings_by_entity?.[entityId] : null;
+        const fallbackSettings = Object.values(settings.settings_by_entity || {})
+            .find(item => item?.userConfigured && item?.hideLastN > 0);
+        const sourceSettings = entitySettings?.hideLastN > 0 ? entitySettings : fallbackSettings;
+
+        if (sourceSettings) {
+            settings.globalHideSettings = { ...sourceSettings };
+            Logger.info(`已将原角色设置 N=${sourceSettings.hideLastN} 迁移为全局默认设置`);
+        }
+    }
+
+    settings.useGlobalSettings = true;
+    settings.global_mode_default_v1_complete = true;
+    saveSettingsDebounced();
 }
 
 // 获取优化的上下文
@@ -488,6 +517,9 @@ function loadSettings() {
 
     extension_settings[extensionName].settings_by_entity = extension_settings[extensionName].settings_by_entity || { ...defaultSettings.settings_by_entity };
 
+    // v3.9.6 起默认使用全局模式，并继承已有角色设置，避免每个对话重复配置。
+    migrateDefaultHideModeToGlobal();
+
     // --- 检查并运行迁移 ---
     if (!extension_settings[extensionName].migration_v1_complete) {
         Logger.info('迁移标志未找到，开始迁移...');
@@ -627,6 +659,10 @@ function createPopup() {
                         <div class="hide-helper-current">
                             <strong id="hide-status-text">当前保留楼层数:</strong>
                             <span id="hide-current-value">无</span>
+                        </div>
+                        <div class="hide-helper-visible-floors">
+                            <strong>当前未隐藏楼层</strong>
+                            <span id="hide-visible-floor-list">无</span>
                         </div>
                         <div class="hide-helper-mode-switch">
                             <div class="label-group">
@@ -961,6 +997,7 @@ function updateCurrentHideSettingsDisplay() {
 
     // 更新输入框 (0 或空都显示为空)
     $input.val(currentHideSettings?.hideLastN > 0 ? currentHideSettings.hideLastN : '');
+    updateVisibleFloorDisplay();
 
     // 更新模式切换 UI
     const useGlobal = extension_settings[extensionName]?.useGlobalSettings || false;
@@ -1032,6 +1069,23 @@ function scheduleFullHideCheck(reason, delays = [100]) {
         }, delay);
         scheduledHideCheckTimers.set(delay, timer);
     });
+}
+
+function updateVisibleFloorDisplay(chatOverride = null) {
+    const $floorList = $('#hide-visible-floor-list');
+    if ($floorList.length === 0) return;
+
+    const chat = chatOverride || getContextOptimized()?.chat;
+    if (!Array.isArray(chat)) {
+        $floorList.text('请先进入一个对话');
+        return;
+    }
+
+    const visibleFloors = [];
+    chat.forEach((msg, index) => {
+        if (msg && msg.is_system !== true) visibleFloors.push(index);
+    });
+    $floorList.text(visibleFloors.length > 0 ? visibleFloors.join('、') : '无');
 }
 
 function isMessageEditActive() {
@@ -1263,6 +1317,7 @@ async function runFullHideCheck() {
     Logger.debug(`【全量隐藏检查】   - 上次处理长度: ${lastProcessedLength}`);
 
     if (currentChatLength === 0 || hideLastN <= 0) {
+        updateVisibleFloorDisplay(chat);
         Logger.debug('【全量隐藏检查】⛔ 聊天为空或 N 值无效，跳过');
         Logger.debug('🔍🔍🔍【全量隐藏检查】结束🔍🔍🔍');
         Logger.debug('');
@@ -1397,6 +1452,8 @@ async function runFullHideCheck() {
     } else {
         Logger.debug(`【全量隐藏检查】ℹ️  无需保存设置`);
     }
+
+    updateVisibleFloorDisplay(chat);
 
     const elapsed = (performance.now() - startTime).toFixed(2);
     Logger.debug(`【全量隐藏检查】✨ 全量检查完成！隐藏: ${toHide.length}, 显示: ${toShow.length}, 耗时: ${elapsed}ms`);
@@ -2088,6 +2145,8 @@ function setupEventListeners() {
         $(window).off('resize.hideHelperMain').on('resize.hideHelperMain', () => centerPopup($popup));
         window.visualViewport?.removeEventListener('resize', handleHideHelperViewportResize);
         window.visualViewport?.addEventListener('resize', handleHideHelperViewportResize);
+        window.visualViewport?.removeEventListener('scroll', handleHideHelperViewportResize);
+        window.visualViewport?.addEventListener('scroll', handleHideHelperViewportResize);
 
         // 恢复日志UI开关状态
         const logUiVisible = extension_settings[extensionName].logUiVisible || false;
@@ -2174,6 +2233,7 @@ function setupEventListeners() {
         $('#hide-helper-backdrop').hide();
         $(window).off('resize.hideHelperMain');
         window.visualViewport?.removeEventListener('resize', handleHideHelperViewportResize);
+        window.visualViewport?.removeEventListener('scroll', handleHideHelperViewportResize);
 
         Logger.debug(`【关闭弹窗】✅ 弹窗已关闭`);
         Logger.debug('🚪🚪🚪【关闭弹窗】结束🚪🚪🚪');
@@ -2595,6 +2655,7 @@ function setupEventListeners() {
             saveChatDebounced();
             Logger.debug(`👁️【手动取消隐藏】索引 ${mesId}: 已记录为手动显示，自动隐藏将跳过该楼层`);
         }
+        setTimeout(() => updateVisibleFloorDisplay(), 100);
     });
 
     $(document).off('click.hideHelperManualHide').on('click.hideHelperManualHide', '.mes_hide', function() {
@@ -2605,6 +2666,7 @@ function setupEventListeners() {
         if (msg) {
             markManuallyHidden(msg);
             saveChatDebounced();
+            setTimeout(() => updateVisibleFloorDisplay(), 100);
             Logger.debug(`🙈【手动隐藏】索引 ${mesId}: 已记录为手动隐藏，自动隐藏将跳过该楼层`);
         }
     });

@@ -186,6 +186,13 @@
 #hide-helper-popup .hide-helper-current strong { color: var(--hh-text-primary); font-weight: 500; }
 #hide-current-value { font-weight: bold; color: var(--hh-accent-color); font-size: 16px; margin-left: 8px; }
 
+#hide-helper-popup .hide-helper-visible-floors {
+    display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
+    color: var(--hh-text-secondary); font-size: 13px; background: var(--hh-background-secondary); border-radius: 8px;
+}
+#hide-helper-popup .hide-helper-visible-floors strong { color: var(--hh-text-primary); font-weight: 500; }
+#hide-helper-popup #hide-visible-floor-list { max-height: 72px; overflow-y: auto; line-height: 1.6; overflow-wrap: anywhere; }
+
 #hide-helper-popup .hide-helper-mode-switch {
     display: flex; justify-content: space-between; align-items: center;
     background: var(--hh-background-secondary); padding: 12px 15px; border-radius: 8px;
