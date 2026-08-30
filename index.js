@@ -256,6 +256,9 @@ function applyLogLevel(level) {
     $('#hide-helper-log-level-display').text(levelTexts[level] || '零日志');
 }
 
+let hideHelperViewportCenterTimer = null;
+let hideHelperViewportCenterRaf = null;
+
 /**
  * 通用弹窗居中函数
  * @param {jQuery} $popup - 需要居中的弹窗的jQuery对象
@@ -297,6 +300,34 @@ function centerPopup($popup) {
     });
 }
 
+function cancelScheduledPopupCenter() {
+    if (hideHelperViewportCenterTimer) {
+        clearTimeout(hideHelperViewportCenterTimer);
+        hideHelperViewportCenterTimer = null;
+    }
+
+    if (hideHelperViewportCenterRaf && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(hideHelperViewportCenterRaf);
+        hideHelperViewportCenterRaf = null;
+    }
+}
+
+function schedulePopupCenter($popup, delay = 0) {
+    cancelScheduledPopupCenter();
+    hideHelperViewportCenterTimer = setTimeout(() => {
+        hideHelperViewportCenterTimer = null;
+        if (typeof requestAnimationFrame !== 'function') {
+            centerPopup($popup);
+            return;
+        }
+
+        hideHelperViewportCenterRaf = requestAnimationFrame(() => {
+            hideHelperViewportCenterRaf = null;
+            centerPopup($popup);
+        });
+    }, delay);
+}
+
 function resetPopupScroll(targetTab = null) {
     const $content = $('#hide-helper-popup .popup-tabs-content');
     $content.scrollTop(0);
@@ -309,7 +340,7 @@ function resetPopupScroll(targetTab = null) {
 }
 
 function handleHideHelperViewportResize() {
-    centerPopup($('#hide-helper-popup'));
+    schedulePopupCenter($('#hide-helper-popup'), 120);
 }
 
 function migrateDefaultHideModeToGlobal() {
@@ -517,7 +548,7 @@ function loadSettings() {
 
     extension_settings[extensionName].settings_by_entity = extension_settings[extensionName].settings_by_entity || { ...defaultSettings.settings_by_entity };
 
-    // v3.9.6 起默认使用全局模式，并继承已有角色设置，避免每个对话重复配置。
+    // v3.9.7 起默认使用全局模式，并继承已有角色设置，避免每个对话重复配置。
     migrateDefaultHideModeToGlobal();
 
     // --- 检查并运行迁移 ---
@@ -2142,7 +2173,7 @@ function setupEventListeners() {
         $popup.css('display', 'flex');
         resetPopupScroll(lastActiveTab);
         centerPopup($popup);
-        $(window).off('resize.hideHelperMain').on('resize.hideHelperMain', () => centerPopup($popup));
+        $(window).off('resize.hideHelperMain').on('resize.hideHelperMain', () => schedulePopupCenter($popup, 120));
         window.visualViewport?.removeEventListener('resize', handleHideHelperViewportResize);
         window.visualViewport?.addEventListener('resize', handleHideHelperViewportResize);
         window.visualViewport?.removeEventListener('scroll', handleHideHelperViewportResize);
@@ -2232,6 +2263,7 @@ function setupEventListeners() {
         $('#hide-helper-popup').hide();
         $('#hide-helper-backdrop').hide();
         $(window).off('resize.hideHelperMain');
+        cancelScheduledPopupCenter();
         window.visualViewport?.removeEventListener('resize', handleHideHelperViewportResize);
         window.visualViewport?.removeEventListener('scroll', handleHideHelperViewportResize);
 
@@ -2240,11 +2272,7 @@ function setupEventListeners() {
         Logger.debug('');
     }
 
-    $('#hide-helper-popup').on('mousedown touchstart click wheel', function(e) {
-        e.stopPropagation();
-    });
-
-    $('#hide-helper-popup').on('input change keydown keyup', 'input, select, textarea, button', function(e) {
+    $('#hide-helper-popup').on('mousedown touchstart wheel', function(e) {
         e.stopPropagation();
     });
 
