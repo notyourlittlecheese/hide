@@ -2899,8 +2899,19 @@ globalThis.HideHelper_interceptGeneration = function (chat) {
 
     const originalLength = chat.length;
     const targetLength = hideSettings.hideLastN;
+    const context = getContextOptimized();
+    const isLiveChatArray = context?.chat === chat;
 
     syncManualVisibilityOverrides(chat);
+
+    if (isLiveChatArray) {
+        Logger.warn('');
+        Logger.warn('🛡️【请求拦截】检测到传入的是真实聊天数组，跳过 splice 以避免破坏当前对话');
+        Logger.warn('🛡️【请求拦截】真实聊天隐藏状态将由全量隐藏检查维护');
+        Logger.warn('');
+        runFullHideCheckDebounced();
+        return;
+    }
 
     const kept = [];
     let countedAutoVisible = 0;
