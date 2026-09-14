@@ -1155,7 +1155,7 @@ function isManuallyShown(msg) {
 
 function isManuallyHidden(msg) {
     return msg?.is_system === true
-        && (msg?.extra?.[HIDE_HELPER_MANUAL_HIDE_FLAG] === true || !isHideHelperAutoHidden(msg));
+        && msg?.extra?.[HIDE_HELPER_MANUAL_HIDE_FLAG] === true;
 }
 
 function markAutoHidden(msg) {
@@ -1204,12 +1204,27 @@ function clearManuallyHidden(msg) {
     delete msg.extra[HIDE_HELPER_MANUAL_HIDE_FLAG];
 }
 
-function syncManualVisibilityOverrides(chat) {
+function getMessageDomHidden(index) {
+    const $message = $(`.mes[mesid="${index}"]`);
+    if ($message.length === 0) return null;
+    return $message.attr('is_system') === 'true';
+}
+
+function syncManualVisibilityOverrides(chat, readDomState = false) {
     let changed = false;
 
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
         if (!msg) continue;
+
+        const domHidden = readDomState ? getMessageDomHidden(i) : null;
+
+        if (domHidden === false && isHideHelperAutoHidden(msg)) {
+            markManuallyShown(msg);
+            changed = true;
+            Logger.debug(`【手动状态同步】索引 ${i}: 检测到自动隐藏楼层在 DOM 中显示，已锁定为手动显示`);
+            continue;
+        }
 
         if (isHideHelperAutoHidden(msg) && msg.is_system !== true) {
             markManuallyShown(msg);
@@ -1234,14 +1249,6 @@ function syncManualVisibilityOverrides(chat) {
             changed = true;
             Logger.debug(`【手动状态同步】索引 ${i}: 检测到手动显示楼层被再次隐藏，已切换为手动隐藏`);
             continue;
-        }
-
-        if (msg.is_system === true
-            && msg?.extra?.[HIDE_HELPER_MANUAL_HIDE_FLAG] !== true
-            && !isHideHelperAutoHidden(msg)) {
-            markManuallyHidden(msg);
-            changed = true;
-            Logger.debug(`【手动状态同步】索引 ${i}: 检测到楼层被手动隐藏，已锁定为手动隐藏`);
         }
     }
 
@@ -1335,12 +1342,12 @@ async function runFullHideCheck() {
         return;
     }
 
-    const manualOverrideChanged = syncManualVisibilityOverrides(chat);
-
     Logger.debug(`【全量隐藏检查】📊 当前聊天长度: ${currentChatLength}`);
 
     const settings = getCurrentHideSettings() || { hideLastN: 0, lastProcessedLength: 0, userConfigured: false };
     const { hideLastN, lastProcessedLength, userConfigured } = settings;
+
+    const manualOverrideChanged = syncManualVisibilityOverrides(chat, true);
 
     Logger.debug(`【全量隐藏检查】📋 配置信息:`);
     Logger.debug(`【全量隐藏检查】   - 保留楼层数 N: ${hideLastN}`);
