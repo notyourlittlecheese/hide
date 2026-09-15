@@ -1250,6 +1250,15 @@ function syncManualVisibilityOverrides(chat, readDomState = false) {
             Logger.debug(`【手动状态同步】索引 ${i}: 检测到手动显示楼层被再次隐藏，已切换为手动隐藏`);
             continue;
         }
+
+        if ((domHidden === true || msg.is_system === true)
+            && msg?.extra?.[HIDE_HELPER_MANUAL_HIDE_FLAG] !== true
+            && !isHideHelperAutoHidden(msg)) {
+            markManuallyHidden(msg);
+            changed = true;
+            Logger.debug(`【手动状态同步】索引 ${i}: 检测到非插件自动隐藏楼层，已锁定为手动隐藏`);
+            continue;
+        }
     }
 
     return changed;
