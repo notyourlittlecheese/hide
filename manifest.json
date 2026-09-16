@@ -6,6 +6,6 @@
     "js": "index.js",
     "css": "style.css",
     "author": "uhhhh15",
-    "version": "3.9.9",
+    "version": "3.9.10",
     "description": "高效批量隐藏/显示消息的工具"
 }
