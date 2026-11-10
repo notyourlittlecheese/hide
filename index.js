@@ -8,6 +8,8 @@ import { groups } from "../../../group-chats.js";
 import { power_user } from "../../../power-user.js";
 import { getTokenCountAsync } from "../../../tokenizers.js";
 import { promptManager } from "../../../openai.js";
+import { SlashCommandParser } from "../../../slash-commands/SlashCommandParser.js";
+import { stringToRange } from "../../../utils.js";
 import { checkForUpdates, getChangelog, performUpdate, initUpdateCheck } from "./update.js";
 
 const extensionName = "hide";
@@ -368,13 +370,8 @@ function migrateDefaultHideModeToGlobal() {
 
 // 获取优化的上下文
 function getContextOptimized() {
-    if (!cachedContext) {
-        Logger.debug('上下文缓存未命中，正在获取...');
-        cachedContext = getContext(); // getContext returns a rich object
-        Logger.debug('上下文已获取');
-    } else {
-        Logger.debug('上下文缓存命中');
-    }
+    // Chat arrays may be replaced on reload or swipe before CHAT_CHANGED fires.
+    cachedContext = getContext();
     return cachedContext;
 }
 
@@ -1079,8 +1076,26 @@ function debounce(fn, delay) {
 
 
 // 防抖版本的全量检查
-const runFullHideCheckDebounced = debounce(runFullHideCheck, 200);
+const runFullHideCheckDebounced = () => scheduleFullHideCheck('防抖检查', [200]);
 const scheduledHideCheckTimers = new Map();
+let hideChatEpoch = 0;
+
+function cancelScheduledHideChecks() {
+    hideChatEpoch++;
+    for (const timer of scheduledHideCheckTimers.values()) clearTimeout(timer);
+    scheduledHideCheckTimers.clear();
+}
+
+function captureHideChat() {
+    const context = getContextOptimized();
+    return { chat: context?.chat, id: context?.chatId, epoch: hideChatEpoch };
+}
+
+function isCurrentHideChat(snapshot) {
+    const context = getContextOptimized();
+    return snapshot.epoch === hideChatEpoch
+        && snapshot.chat === context?.chat && snapshot.id === context?.chatId;
+}
 
 function scheduleFullHideCheck(reason, delays = [100]) {
     if (!extension_settings[extensionName]?.enabled) {
@@ -1088,18 +1103,16 @@ function scheduleFullHideCheck(reason, delays = [100]) {
         return;
     }
 
-    delays.forEach((delay) => {
-        if (scheduledHideCheckTimers.has(delay)) {
-            clearTimeout(scheduledHideCheckTimers.get(delay));
-        }
-
-        const timer = setTimeout(() => {
-            scheduledHideCheckTimers.delete(delay);
-            Logger.debug(`【隐藏检查调度】${reason}: 延迟 ${delay}ms 执行全量隐藏检查`);
-            runFullHideCheckDebounced();
-        }, delay);
-        scheduledHideCheckTimers.set(delay, timer);
-    });
+    const snapshot = captureHideChat();
+    if (!Array.isArray(snapshot.chat)) return;
+    // One pending check for all data events; no trailing second debounce.
+    const delay = Math.min(...delays);
+    clearTimeout(scheduledHideCheckTimers.get('data'));
+    const timer = setTimeout(() => {
+        scheduledHideCheckTimers.delete('data');
+        if (isCurrentHideChat(snapshot)) runFullHideCheck();
+    }, delay);
+    scheduledHideCheckTimers.set('data', timer);
 }
 
 function updateVisibleFloorDisplay(chatOverride = null) {
@@ -1143,39 +1156,10 @@ const HIDE_HELPER_AUTO_FLAG = 'hideHelperAutoHidden';
 const HIDE_HELPER_MANUAL_SHOW_FLAG = 'hideHelperManuallyShown';
 const HIDE_HELPER_MANUAL_SHOW_CLICK_FLAG = 'hideHelperManuallyShownByClick';
 const HIDE_HELPER_MANUAL_HIDE_FLAG = 'hideHelperManuallyHidden';
-const observedVisibilityMessages = new WeakSet();
-const internalVisibilityWrites = new WeakSet();
+const HIDE_HELPER_MANUAL_SOURCE = 'hideHelperManualSource';
 
 function writeHelperVisibility(msg, hidden) {
-    internalVisibilityWrites.add(msg);
-    try {
-        msg.is_system = hidden;
-    } finally {
-        internalVisibilityWrites.delete(msg);
-    }
-}
-
-// Observe assignments, including hide=true on an already auto-hidden message.
-// DOM attributes can lag behind the model during rendering and are not user intent.
-function observeMessageVisibility(msg) {
-    if (!msg || observedVisibilityMessages.has(msg)) return;
-    const descriptor = Object.getOwnPropertyDescriptor(msg, 'is_system');
-    if (descriptor && (!descriptor.configurable || descriptor.get || descriptor.set || !descriptor.writable)) return;
-    let hidden = msg.is_system;
-    Object.defineProperty(msg, 'is_system', {
-        configurable: true,
-        enumerable: true,
-        get() { return hidden; },
-        set(value) {
-            hidden = value;
-            if (internalVisibilityWrites.has(msg)) return;
-            if (value === true) markManuallyHidden(msg);
-            else markManuallyShown(msg);
-            saveChatDebounced();
-            scheduleFullHideCheck('外部隐藏状态变更', [100]);
-        },
-    });
-    observedVisibilityMessages.add(msg);
+    if (msg.is_system !== hidden) msg.is_system = hidden;
 }
 
 function getKeepVisibleIndices(chat, limit) {
@@ -1183,11 +1167,13 @@ function getKeepVisibleIndices(chat, limit) {
     for (let i = 0; i < chat.length; i++) {
         if (isManuallyShown(chat[i])) kept.add(i);
     }
-    for (let i = chat.length - 1; i >= 0 && kept.size < limit; i--) {
+    let recentCount = 0;
+    for (let i = chat.length - 1; i >= 0 && recentCount < limit; i--) {
         const msg = chat[i];
         if (!msg || isManuallyHidden(msg)) continue;
-        if (msg.is_system === true && !isHideHelperAutoHidden(msg)) continue;
+        if (msg.is_system === true && !isHideHelperAutoHidden(msg) && !isManuallyShown(msg)) continue;
         kept.add(i);
+        recentCount++;
     }
     return kept;
 }
@@ -1197,13 +1183,12 @@ function isHideHelperAutoHidden(msg) {
 }
 
 function isManuallyShown(msg) {
-    return msg?.is_system !== true
+    return !isManuallyHidden(msg)
         && msg?.extra?.[HIDE_HELPER_MANUAL_SHOW_FLAG] === true;
 }
 
 function isManuallyHidden(msg) {
-    return msg?.is_system === true
-        && msg?.extra?.[HIDE_HELPER_MANUAL_HIDE_FLAG] === true;
+    return msg?.extra?.[HIDE_HELPER_MANUAL_HIDE_FLAG] === true;
 }
 
 function markAutoHidden(msg) {
@@ -1221,13 +1206,14 @@ function clearAutoHidden(msg) {
     writeHelperVisibility(msg, false);
 }
 
-function markManuallyShown(msg) {
+function markManuallyShown(msg, source = 'button') {
     if (!msg) return;
     msg.extra = msg.extra || {};
     delete msg.extra[HIDE_HELPER_AUTO_FLAG];
     delete msg.extra[HIDE_HELPER_MANUAL_HIDE_FLAG];
     msg.extra[HIDE_HELPER_MANUAL_SHOW_FLAG] = true;
     msg.extra[HIDE_HELPER_MANUAL_SHOW_CLICK_FLAG] = true;
+    msg.extra[HIDE_HELPER_MANUAL_SOURCE] = source;
     writeHelperVisibility(msg, false);
 }
 
@@ -1237,13 +1223,14 @@ function clearManuallyShown(msg) {
     delete msg.extra[HIDE_HELPER_MANUAL_SHOW_CLICK_FLAG];
 }
 
-function markManuallyHidden(msg) {
+function markManuallyHidden(msg, source = 'button') {
     if (!msg) return;
     msg.extra = msg.extra || {};
     delete msg.extra[HIDE_HELPER_AUTO_FLAG];
     delete msg.extra[HIDE_HELPER_MANUAL_SHOW_FLAG];
     delete msg.extra[HIDE_HELPER_MANUAL_SHOW_CLICK_FLAG];
     msg.extra[HIDE_HELPER_MANUAL_HIDE_FLAG] = true;
+    msg.extra[HIDE_HELPER_MANUAL_SOURCE] = source;
     writeHelperVisibility(msg, true);
 }
 
@@ -1259,44 +1246,83 @@ function syncManualVisibilityOverrides(chat) {
         const msg = chat[i];
         if (!msg) continue;
 
-        observeMessageVisibility(msg);
-
-        if (isHideHelperAutoHidden(msg) && msg.is_system !== true) {
-            markManuallyShown(msg);
+        // Existing overrides are authoritative, but a plain state assignment
+        // supplies no evidence of user intent. Never manufacture manual flags.
+        const hidden = isManuallyHidden(msg) ? true : isManuallyShown(msg) ? false : null;
+        if (hidden !== null && msg.is_system !== hidden) {
+            writeHelperVisibility(msg, hidden);
             changed = true;
-            Logger.debug(`【手动状态同步】索引 ${i}: 检测到自动隐藏楼层被手动取消隐藏，已锁定为手动显示`);
-            continue;
-        }
-
-        if (msg?.extra?.[HIDE_HELPER_MANUAL_HIDE_FLAG] === true && msg.is_system !== true) {
-            clearManuallyHidden(msg);
-            markManuallyShown(msg);
-            changed = true;
-            Logger.debug(`【手动状态同步】索引 ${i}: 检测到手动隐藏楼层被取消隐藏，已切换为手动显示`);
-            continue;
-        }
-
-        if (msg.is_system === true
-            && msg?.extra?.[HIDE_HELPER_MANUAL_SHOW_FLAG] === true
-            && !isHideHelperAutoHidden(msg)) {
-            clearManuallyShown(msg);
-            markManuallyHidden(msg);
-            changed = true;
-            Logger.debug(`【手动状态同步】索引 ${i}: 检测到手动显示楼层被再次隐藏，已切换为手动隐藏`);
-            continue;
-        }
-
-        if (msg.is_system === true
-            && msg?.extra?.[HIDE_HELPER_MANUAL_HIDE_FLAG] !== true
-            && !isHideHelperAutoHidden(msg)) {
-            markManuallyHidden(msg);
-            changed = true;
-            Logger.debug(`【手动状态同步】索引 ${i}: 检测到非插件自动隐藏楼层，已锁定为手动隐藏`);
-            continue;
         }
     }
 
     return changed;
+}
+
+function recordManualVisibility(msg, hidden, source = 'button') {
+    if (!msg) return false;
+    const alreadyRecorded = msg.is_system === hidden
+        && (hidden ? isManuallyHidden(msg) : isManuallyShown(msg))
+        && !isHideHelperAutoHidden(msg)
+        && msg.extra?.[HIDE_HELPER_MANUAL_SOURCE] === source;
+    if (alreadyRecorded) return false;
+    if (hidden) markManuallyHidden(msg, source);
+    else markManuallyShown(msg, source);
+    return true;
+}
+
+const wrappedVisibilityCommands = new WeakSet();
+function installVisibilityCommandHooks() {
+    for (const name of ['hide', 'unhide']) {
+        const command = SlashCommandParser.commands[name];
+        if (!command || command.isExtension || wrappedVisibilityCommands.has(command)) continue;
+        const original = command.callback;
+        if (typeof original !== 'function') continue;
+        command.callback = function(args, value) {
+            const snapshot = captureHideChat();
+            const chat = snapshot.chat || [];
+            const range = value ? stringToRange(value, 0, chat.length - 1)
+                : { start: chat.length - 1, end: chat.length - 1 };
+            const filter = String(args?.name ?? '').trim();
+            const targets = range ? chat.slice(range.start, range.end + 1)
+                .filter(msg => msg && (!filter || msg.name === filter)) : [];
+            // The native callback writes synchronously before awaiting its save.
+            // Record only explicit command targets, including same-value writes.
+            const result = original.call(this, args, value);
+            if (isCurrentHideChat(snapshot)) {
+                let changed = false;
+                for (const msg of targets) {
+                    if (msg.is_system === (name === 'hide')) {
+                        changed = recordManualVisibility(msg, name === 'hide', 'command') || changed;
+                    }
+                }
+                if (changed) saveChatDebounced();
+                scheduleFullHideCheck('显式隐藏命令');
+            }
+            return result;
+        };
+        wrappedVisibilityCommands.add(command);
+    }
+}
+
+function syncVisibilityDom(chat = getContextOptimized()?.chat) {
+    if (!Array.isArray(chat)) return;
+    chat.forEach((msg, index) => {
+        if (!msg) return;
+        const element = $(`.mes[mesid="${index}"]`);
+        const hidden = String(msg.is_system === true);
+        if (element.length && element.attr('is_system') !== hidden) element.attr('is_system', hidden);
+    });
+    updateVisibleFloorDisplay(chat);
+}
+
+function handleVisibilityDomMutations(mutations) {
+    // Only message roots need repainting. Streaming text and theme metadata
+    // must not schedule model mutations or chat saves.
+    if (mutations.some(mutation => mutation.type === 'childList'
+        && Array.from(mutation.addedNodes).some(node => node.nodeType === 1
+            && (node.matches?.('.mes[mesid]') || node.querySelector?.('.mes[mesid]'))))) {
+        syncVisibilityDom();
+    }
 }
 
 // 检查是否应该执行隐藏/取消隐藏操作
@@ -1431,7 +1457,6 @@ async function runFullHideCheck() {
         if (isManuallyHidden(msg)) {
             if (!domHidden) {
                 toHide.push(i);
-                changed = true;
                 Logger.debug(`【全量隐藏检查】   🔧 索引 ${i}: 手动隐藏，修正 DOM 为隐藏`);
             }
             Logger.debug(`【全量隐藏检查】   ⏭️  索引 ${i}: 手动隐藏，保持隐藏`);
@@ -1450,7 +1475,6 @@ async function runFullHideCheck() {
             }
             if (!domHidden) {
                 toHide.push(i);
-                changed = true;
                 Logger.debug(`【全量隐藏检查】   🔧 索引 ${i}: 修正 DOM 为隐藏`);
             }
         } else if (shouldBeVisible && autoHidden) {
@@ -1460,7 +1484,6 @@ async function runFullHideCheck() {
             Logger.debug(`【全量隐藏检查】   👁️  索引 ${i}: 取消插件自动隐藏`);
         } else if ((shouldBeVisible || isManuallyShown(msg)) && domHidden && !isCurrentlyHidden) {
             toShow.push(i);
-            changed = true;
             Logger.debug(`【全量隐藏检查】   🔧 索引 ${i}: 修正 DOM 为显示`);
         } else {
             const status = isCurrentlyHidden ? '已隐藏' : '已显示';
@@ -1473,7 +1496,7 @@ async function runFullHideCheck() {
     Logger.debug(`【全量隐藏检查】   - 需要显示: ${toShow.length} 条 [${toShow.join(', ') || '无'}]`);
     Logger.debug(`【全量隐藏检查】   - 是否有变化: ${changed}`);
 
-    if (changed) {
+    if (toHide.length || toShow.length) {
         try {
             Logger.debug(`【全量隐藏检查】🔄 开始应用 DOM 更新...`);
 
@@ -2678,7 +2701,7 @@ function setupEventListeners() {
         Logger.debug('');
         Logger.debug('📢【事件】CHAT_CHANGED - 聊天已切换');
         cachedContext = null; // 清理缓存
-        syncManualVisibilityOverrides(getContextOptimized()?.chat || []);
+        cancelScheduledHideChecks();
 
         updateCurrentHideSettingsDisplay(); // 更新所有UI
 
@@ -2693,7 +2716,6 @@ function setupEventListeners() {
 
     const handleNewMessage = (eventType) => {
         const context = getContextOptimized();
-        syncManualVisibilityOverrides(context?.chat || []);
         const chatLength = context?.chat?.length || 0;
         Logger.debug('');
         Logger.debug(`📨【事件】${eventType} - 新消息事件`);
@@ -2703,7 +2725,15 @@ function setupEventListeners() {
         Logger.debug('');
     };
     eventSource.on(event_types.MESSAGE_RECEIVED, () => handleNewMessage(event_types.MESSAGE_RECEIVED));
-    eventSource.on(event_types.MESSAGE_SENT, () => handleNewMessage(event_types.MESSAGE_SENT));
+    eventSource.on(event_types.MESSAGE_SENT, () => {
+        // ST builds coreChat immediately after this event, before our timers.
+        return runFullHideCheck();
+    });
+    if (event_types.GENERATION_AFTER_COMMANDS) {
+        eventSource.on(event_types.GENERATION_AFTER_COMMANDS, (type, options, dryRun) => {
+            if (!dryRun) return runFullHideCheck();
+        });
+    }
 
     $(document).off('click.hideHelperManualShow').on('click.hideHelperManualShow', '.mes_unhide', function() {
         const mesId = Number($(this).closest('.mes').attr('mesid'));
@@ -2711,8 +2741,7 @@ function setupEventListeners() {
         const msg = context?.chat?.[mesId];
 
         if (msg) {
-            markManuallyShown(msg);
-            saveChatDebounced();
+            if (recordManualVisibility(msg, false)) saveChatDebounced();
             Logger.debug(`👁️【手动取消隐藏】索引 ${mesId}: 已记录为手动显示，自动隐藏将跳过该楼层`);
         }
         setTimeout(() => updateVisibleFloorDisplay(), 100);
@@ -2725,8 +2754,7 @@ function setupEventListeners() {
         const msg = context?.chat?.[mesId];
 
         if (msg) {
-            markManuallyHidden(msg);
-            saveChatDebounced();
+            if (recordManualVisibility(msg, true)) saveChatDebounced();
             scheduleFullHideCheck('手动隐藏', [100]);
             setTimeout(() => updateVisibleFloorDisplay(), 100);
             Logger.debug(`🙈【手动隐藏】索引 ${mesId}: 已记录为手动隐藏，自动隐藏将跳过该楼层`);
@@ -2769,20 +2797,7 @@ function setupEventListeners() {
 
     const chatElement = document.getElementById('chat');
     if (chatElement && typeof MutationObserver !== 'undefined') {
-        const chatObserver = new MutationObserver((mutations) => {
-            const shouldResync = mutations.some((mutation) => {
-                if (mutation.type === 'childList') {
-                    return Array.from(mutation.addedNodes).some(node => node.nodeType === Node.ELEMENT_NODE)
-                        || Array.from(mutation.removedNodes).some(node => node.nodeType === Node.ELEMENT_NODE);
-                }
-
-                return false;
-            });
-
-            if (shouldResync) {
-                scheduleFullHideCheck('聊天 DOM 变化', [100, 500, 1500]);
-            }
-        });
+        const chatObserver = new MutationObserver(handleVisibilityDomMutations);
 
         chatObserver.observe(chatElement, {
             childList: true,
@@ -2844,6 +2859,7 @@ jQuery(async () => {
 
         // 2. 创建 UI (现在依赖于 loadSettings 完成初始化和迁移检查)
         createUI();
+        installVisibilityCommandHooks();
 
         // 2.5 初始化更新检测
         initUpdateCheck().then(updateInfo => {
@@ -2912,7 +2928,7 @@ jQuery(async () => {
     }
 });
 
-// 兜底拦截：在 API 请求前硬性截断 chat 数组，确保只有最近 N 条消息被发送
+// 请求副本兜底：最近 N 条符合条件的消息，加上手动显示的历史例外。
 globalThis.HideHelper_interceptGeneration = function (chat) {
     const settings = extension_settings[extensionName];
 
@@ -2936,10 +2952,6 @@ globalThis.HideHelper_interceptGeneration = function (chat) {
     const context = getContextOptimized();
     const isLiveChatArray = context?.chat === chat;
 
-    // Update the live model synchronously before filtering a request copy.
-    // Never install visibility observers on temporary generation messages.
-    runFullHideCheck();
-
     if (isLiveChatArray) {
         Logger.warn('');
         Logger.warn('🛡️【请求拦截】检测到传入的是真实聊天数组，跳过 splice 以避免破坏当前对话');
@@ -2948,17 +2960,24 @@ globalThis.HideHelper_interceptGeneration = function (chat) {
         return;
     }
 
-    const keepVisible = getKeepVisibleIndices(chat, targetLength);
-    const kept = chat.filter((msg, index) => keepVisible.has(index));
-    for (const msg of kept) {
-        if (isHideHelperAutoHidden(msg)) clearAutoHidden(msg);
-    }
+    const snapshot = chat.slice();
+    const keepVisible = getKeepVisibleIndices(snapshot, targetLength);
+    const kept = snapshot.filter((msg, index) => keepVisible.has(index)).map(msg => {
+        // Request arrays can be shallow copies of live chat. Copy the fields
+        // we change, and never clear flags on shared source objects.
+        if (isHideHelperAutoHidden(msg) || isManuallyShown(msg)) {
+            const copy = { ...msg, extra: { ...msg.extra }, is_system: false };
+            delete copy.extra[HIDE_HELPER_AUTO_FLAG];
+            return copy;
+        }
+        return msg;
+    });
 
-    if (chat.length !== kept.length) {
+    if (chat.length !== kept.length || kept.some((msg, index) => msg !== chat[index])) {
         Logger.warn('');
         Logger.warn('🛡️【请求拦截】触发兜底保护机制');
         Logger.warn(`🛡️【请求拦截】原始 chat 长度: ${originalLength}`);
-        Logger.warn(`🛡️【请求拦截】手动显示优先占用 ${targetLength} 条名额，实际保留 ${kept.length} 条`);
+        Logger.warn(`🛡️【请求拦截】最近 ${targetLength} 条加手动显示例外，实际保留 ${kept.length} 条`);
         chat.splice(0, chat.length, ...kept);
         Logger.warn('🛡️【请求拦截】✅ 已按“最近 N 条非隐藏消息”重建发送上下文');
         Logger.warn('');
