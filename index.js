@@ -10,6 +10,7 @@ import { getTokenCountAsync } from "../../../tokenizers.js";
 import { promptManager } from "../../../openai.js";
 import { SlashCommandParser } from "../../../slash-commands/SlashCommandParser.js";
 import { stringToRange } from "../../../utils.js";
+import { callGenericPopup, POPUP_TYPE } from "../../../popup.js";
 import { checkForUpdates, getChangelog, performUpdate, initUpdateCheck } from "./update.js";
 
 const extensionName = "hide";
@@ -635,6 +636,7 @@ function createInputWandButton() {
     Logger.debug('创建输入区按钮');
     // 移除旧按钮，以防重复
     $('#hide-helper-wand-button').remove();
+    $('#hide-helper-manual-button').remove();
     const buttonHtml = `
         <div id="hide-helper-wand-button" title="打开隐藏助手设置">
             <i class="fa-solid fa-ghost"></i>
@@ -642,6 +644,12 @@ function createInputWandButton() {
         </div>`;
     Logger.debug('追加按钮到 #data_bank_wand_container');
     $('#data_bank_wand_container').append(buttonHtml);
+    $('#data_bank_wand_container').append(`
+        <button id="hide-helper-manual-button" type="button" class="menu_button" title="手动隐藏最近楼层">
+            <i class="fa-solid fa-eye-slash" aria-hidden="true"></i>
+            <span>隐藏楼层</span>
+        </button>`);
+    $('#hide-helper-manual-button').on('click', showManualHideDialog);
 }
 
 // index.js (部分)
@@ -1157,6 +1165,49 @@ const HIDE_HELPER_MANUAL_SHOW_FLAG = 'hideHelperManuallyShown';
 const HIDE_HELPER_MANUAL_SHOW_CLICK_FLAG = 'hideHelperManuallyShownByClick';
 const HIDE_HELPER_MANUAL_HIDE_FLAG = 'hideHelperManuallyHidden';
 const HIDE_HELPER_MANUAL_SOURCE = 'hideHelperManualSource';
+const HIDE_HELPER_VISIBILITY = 'hideHelperVisibility';
+
+function getVisibilityState(msg) {
+    const state = msg?.[HIDE_HELPER_VISIBILITY];
+    return state?.version === 1 && ['none', 'auto', 'hide', 'show'].includes(state.mode) ? state : null;
+}
+
+function setVisibilityState(msg, mode, source = null) {
+    const state = getVisibilityState(msg);
+    if (state?.mode === mode && state.source === source) return false;
+    msg[HIDE_HELPER_VISIBILITY] = { version: 1, mode, source };
+    return true;
+}
+
+// Swipe restores extra from swipe_info. Floor ownership must live outside extra.
+function syncVisibilityState(msg) {
+    let changed = false;
+    let state = getVisibilityState(msg);
+    if (!state) {
+        const mode = msg.extra?.[HIDE_HELPER_MANUAL_HIDE_FLAG] === true ? 'hide'
+            : msg.extra?.[HIDE_HELPER_MANUAL_SHOW_FLAG] === true ? 'show'
+            : msg.extra?.[HIDE_HELPER_AUTO_FLAG] === true ? 'auto' : 'none';
+        changed = setVisibilityState(msg, mode, msg.extra?.[HIDE_HELPER_MANUAL_SOURCE] ?? null);
+        state = getVisibilityState(msg);
+    }
+    const expected = {
+        [HIDE_HELPER_AUTO_FLAG]: state.mode === 'auto' ? true : undefined,
+        [HIDE_HELPER_MANUAL_HIDE_FLAG]: state.mode === 'hide' ? true : undefined,
+        [HIDE_HELPER_MANUAL_SHOW_FLAG]: state.mode === 'show' ? true : undefined,
+        [HIDE_HELPER_MANUAL_SHOW_CLICK_FLAG]: state.mode === 'show' ? true : undefined,
+        [HIDE_HELPER_MANUAL_SOURCE]: state.source ?? undefined,
+    };
+    for (const [key, value] of Object.entries(expected)) {
+        if (msg.extra?.[key] === value) continue;
+        if (value === undefined) delete msg.extra[key];
+        else {
+            msg.extra = msg.extra || {};
+            msg.extra[key] = value;
+        }
+        changed = true;
+    }
+    return changed;
+}
 
 function writeHelperVisibility(msg, hidden) {
     if (msg.is_system !== hidden) msg.is_system = hidden;
@@ -1179,20 +1230,27 @@ function getKeepVisibleIndices(chat, limit) {
 }
 
 function isHideHelperAutoHidden(msg) {
+    const state = getVisibilityState(msg);
+    if (state) return state.mode === 'auto';
     return msg?.extra?.[HIDE_HELPER_AUTO_FLAG] === true;
 }
 
 function isManuallyShown(msg) {
+    const state = getVisibilityState(msg);
+    if (state) return state.mode === 'show';
     return !isManuallyHidden(msg)
         && msg?.extra?.[HIDE_HELPER_MANUAL_SHOW_FLAG] === true;
 }
 
 function isManuallyHidden(msg) {
+    const state = getVisibilityState(msg);
+    if (state) return state.mode === 'hide';
     return msg?.extra?.[HIDE_HELPER_MANUAL_HIDE_FLAG] === true;
 }
 
 function markAutoHidden(msg) {
     if (!msg) return;
+    setVisibilityState(msg, 'auto');
     msg.extra = msg.extra || {};
     msg.extra[HIDE_HELPER_AUTO_FLAG] = true;
     writeHelperVisibility(msg, true);
@@ -1200,6 +1258,7 @@ function markAutoHidden(msg) {
 
 function clearAutoHidden(msg) {
     if (!msg) return;
+    setVisibilityState(msg, 'none');
     if (msg.extra) {
         delete msg.extra[HIDE_HELPER_AUTO_FLAG];
     }
@@ -1208,6 +1267,7 @@ function clearAutoHidden(msg) {
 
 function markManuallyShown(msg, source = 'button') {
     if (!msg) return;
+    setVisibilityState(msg, 'show', source);
     msg.extra = msg.extra || {};
     delete msg.extra[HIDE_HELPER_AUTO_FLAG];
     delete msg.extra[HIDE_HELPER_MANUAL_HIDE_FLAG];
@@ -1225,6 +1285,7 @@ function clearManuallyShown(msg) {
 
 function markManuallyHidden(msg, source = 'button') {
     if (!msg) return;
+    setVisibilityState(msg, 'hide', source);
     msg.extra = msg.extra || {};
     delete msg.extra[HIDE_HELPER_AUTO_FLAG];
     delete msg.extra[HIDE_HELPER_MANUAL_SHOW_FLAG];
@@ -1246,6 +1307,7 @@ function syncManualVisibilityOverrides(chat) {
         const msg = chat[i];
         if (!msg) continue;
 
+        changed = syncVisibilityState(msg) || changed;
         // Existing overrides are authoritative, but a plain state assignment
         // supplies no evidence of user intent. Never manufacture manual flags.
         const hidden = isManuallyHidden(msg) ? true : isManuallyShown(msg) ? false : null;
@@ -1268,6 +1330,45 @@ function recordManualVisibility(msg, hidden, source = 'button') {
     if (hidden) markManuallyHidden(msg, source);
     else markManuallyShown(msg, source);
     return true;
+}
+
+let manualHideDialogOpen = false;
+async function showManualHideDialog() {
+    if (manualHideDialogOpen) return;
+    manualHideDialogOpen = true;
+    try {
+        const snapshot = captureHideChat();
+        if (!snapshot.chat?.length) {
+            toastr.warning('没有消息可以隐藏');
+            return;
+        }
+        const messages = snapshot.chat.slice();
+        const result = await callGenericPopup('隐藏最近几楼？', POPUP_TYPE.INPUT, '2', { rows: 1, okButton: '隐藏' });
+        if (result === null || result === false || result === undefined || String(result).trim() === '') return;
+        const value = String(result).trim();
+        const count = Number(value);
+        if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(count)) {
+            toastr.warning('请输入大于 0 的整数');
+            return;
+        }
+        if (!isCurrentHideChat(snapshot) || messages.length !== snapshot.chat.length
+            || messages.some((msg, index) => msg !== snapshot.chat[index])) {
+            toastr.warning('对话或楼层已变化，请重新点击');
+            return;
+        }
+        let changed = false;
+        const targets = messages.slice(-count);
+        for (const msg of targets) changed = recordManualVisibility(msg, true, 'button') || changed;
+        if (changed) saveChatDebounced();
+        syncVisibilityDom(snapshot.chat);
+        await runFullHideCheck();
+        toastr.success(`已手动隐藏最近 ${targets.length} 楼`);
+    } catch (error) {
+        Logger.error('手动隐藏楼层失败', error);
+        toastr.error('隐藏失败，请检查酒馆日志');
+    } finally {
+        manualHideDialogOpen = false;
+    }
 }
 
 const wrappedVisibilityCommands = new WeakSet();
@@ -1564,6 +1665,7 @@ async function unhideAllMessages(isFromInputZero = false) {
         Logger.debug(`【取消所有隐藏】   - 已隐藏消息数: ${unhiddenCount}`);
 
         chat.forEach(msg => {
+            setVisibilityState(msg, 'none');
             if (msg.is_system) {
                 writeHelperVisibility(msg, false);
             }
@@ -1573,6 +1675,7 @@ async function unhideAllMessages(isFromInputZero = false) {
                 delete msg.extra[HIDE_HELPER_MANUAL_SHOW_FLAG];
                 delete msg.extra[HIDE_HELPER_MANUAL_SHOW_CLICK_FLAG];
                 delete msg.extra[HIDE_HELPER_MANUAL_HIDE_FLAG];
+                delete msg.extra[HIDE_HELPER_MANUAL_SOURCE];
             }
         });
 
@@ -2967,6 +3070,7 @@ globalThis.HideHelper_interceptGeneration = function (chat) {
         // we change, and never clear flags on shared source objects.
         if (isHideHelperAutoHidden(msg) || isManuallyShown(msg)) {
             const copy = { ...msg, extra: { ...msg.extra }, is_system: false };
+            if (isHideHelperAutoHidden(msg)) setVisibilityState(copy, 'none');
             delete copy.extra[HIDE_HELPER_AUTO_FLAG];
             return copy;
         }

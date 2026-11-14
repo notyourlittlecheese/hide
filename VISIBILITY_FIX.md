@@ -1,4 +1,35 @@
-# Visibility fix: 3.9.11 (local review)
+# Visibility fix: 3.9.12 (local review)
+
+## 3.9.12 follow-up
+
+- Added one built-in "隐藏楼层" button next to Hide Helper in the input wand menu.
+  It opens the native input popup with default 2, accepts a positive integer,
+  and directly records the last N message IDs as manual hides. No separate
+  Tavern Helper script or QR import is required. Already-hidden IDs in the
+  selected range also become explicit manual hides.
+- Cancel and invalid input do nothing. A chat switch, inserted/deleted message,
+  or array replacement while the popup is open cancels the action. Concurrent
+  clicks cannot open multiple dialogs. Explicit hiding works with auto-hide off.
+- Floor ownership is stored in message.hideHelperVisibility, outside extra.
+  SillyTavern 1.19.0 syncSwipeToMes restores extra from swipe_info, which could
+  erase a manual hide or revive a superseded old hide. Legacy flags are adopted
+  conservatively once; extra remains a compatibility mirror. No historical
+  manual hide is automatically discarded and no message text is changed.
+- Both extra-replacement failures were reproduced before this follow-up fix.
+  Added tests cover persistence, ordinary USER/AI generation after manual hiding,
+  popup count/cancel validation, stale-chat rejection, and duplicate clicks.
+  Current result: 23 local tests passed. No real mobile instance was exercised.
+- The supplied Mini Stage JSON loads a mutable remote script. The version
+  fetched on 2026-11-14 reports 3.8.3 and its hideLastPair button uses
+  setChatMessages(is_hidden=true), bypassing native /hide and this plugin's
+  manual records. Use the built-in Hide Helper button instead. The original
+  remote script was not modified.
+  Source: https://cdn.jsdelivr.net/gh/Sanjs333/stage/stage.js
+- This identifies an unsupported entry path, not proof of every reported
+  ordinary-generation failure. Old false manual markers cannot be safely
+  distinguished from genuine ones; explicitly Unhide confirmed false positives.
+
+The following sections document the preceding 3.9.11 work.
 
 ## Confirmed defects in 3.9.10
 

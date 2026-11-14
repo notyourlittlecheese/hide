@@ -57,6 +57,8 @@ function harness(count = 100, limit = 4) {
         return '';
     } };
     const sandbox = {
+        POPUP_TYPE: { INPUT: 'input' }, callGenericPopup: async () => '2',
+        toastr: { warning() {}, success() {}, error() {} },
         performance, document, $, stringToRange, SlashCommandParser: { commands }, eventSource, event_types,
         Logger: { debug() {}, warn() {}, error() {} },
         getContext: () => state, getCurrentEntityId: () => state.entity,
@@ -101,7 +103,7 @@ test('A: N=1/4/10/17/150; repeated checks are idempotent', async () => {
         assert.deepEqual(h.visible(), floors(h.state.chat.slice(-n)));
         const before = clone(h.state.chat), saves = h.counters.saves;
         await h.run(); await h.run();
-        assert.deepEqual(h.state.chat, before);
+        assert.deepEqual(clone(h.state.chat), before);
         assert.equal(h.counters.saves, saves);
     }
 });
@@ -177,9 +179,12 @@ test('G: legacy markers are preserved; targeted Unhide repairs selected floor', 
     const h = harness();
     for (const i of [98, 99]) Object.assign(h.state.chat[i], { is_system: true, extra: { [HIDE]: true } });
     const old = clone(h.state.chat[98]);
-    await h.run(); assert.deepEqual(h.state.chat[98], old);
+    await h.run();
+    assert.deepEqual(h.state.chat[98].extra, old.extra);
+    assert.equal(h.state.chat[98].is_system, old.is_system);
+    const migrated = clone(h.state.chat[98]);
     h.click(99, false); await h.run();
-    assert.deepEqual(h.state.chat[98], old);
+    assert.deepEqual(clone(h.state.chat[98]), migrated);
     assert.equal(h.state.chat[99].is_system, false);
     assert.equal(h.state.chat[99].extra[HIDE], undefined);
 });
@@ -192,12 +197,12 @@ test('H: Continue/Swipe/edit payload and shallow/deep requests leave originals i
     assert.deepEqual(floors(shallow), [4, 5, 6, 7]);
     assert.equal(shallow[0].is_system, false);
     assert.notEqual(shallow[0], h.state.chat[3]);
-    assert.deepEqual(h.state.chat, original);
+    assert.deepEqual(clone(h.state.chat), original);
     const deep = clone(h.state.chat);
     h.sandbox.HideHelper_interceptGeneration(deep);
     assert.deepEqual(floors(deep), [4, 5, 6, 7]);
     h.sandbox.HideHelper_interceptGeneration(h.state.chat);
-    assert.deepEqual(h.state.chat, original);
+    assert.deepEqual(clone(h.state.chat), original);
     await h.run();
     assert.equal(h.state.chat[6].mes, original[6].mes);
     assert.deepEqual(h.state.chat[6].swipes, original[6].swipes);
@@ -323,4 +328,117 @@ test('same-length request replacements do not mutate shared auto flags', () => {
     assert.equal(request[0].is_system, false);
     assert.equal(request[0].extra[AUTO], undefined);
     assert.deepEqual(h.state.chat, before);
+});
+
+test('manual hide survives native extra replacement on swipe and generation', async () => {
+    const h = harness(10);
+    await h.run();
+    h.click(9, true);
+    await h.run();
+    assert.deepEqual(h.visible(), [6, 7, 8, 9]);
+    h.state.chat[9].extra = { [AUTO]: true };
+    await h.eventSource.emit('MESSAGE_SWIPED', 9);
+    await h.flush();
+    h.add();
+    await h.eventSource.emit('MESSAGE_SENT');
+    assert.equal(h.state.chat[9].is_system, true);
+    assert.equal(h.state.chat[9].extra[HIDE], true);
+    assert.deepEqual(h.visible(), [7, 8, 9, 11]);
+});
+
+test('old swipe metadata cannot revive a superseded manual hide', async () => {
+    const h = harness(10);
+    await h.run();
+    h.click(9, true);
+    const oldSwipeExtra = clone(h.state.chat[9].extra);
+    h.click(9, false);
+    await h.run();
+    h.state.chat[9].extra = oldSwipeExtra;
+    await h.eventSource.emit('MESSAGE_SWIPED', 9);
+    await h.flush();
+    await h.eventSource.emit('GENERATION_ENDED');
+    await h.flush();
+    assert.equal(h.state.chat[9].is_system, false);
+    assert.equal(h.state.chat[9].extra[HIDE], undefined);
+    assert.deepEqual(h.visible(), [7, 8, 9, 10]);
+});
+
+test('persisted floor state survives reload and extra reset without touching swipe text', async () => {
+    const h = harness(10);
+    await h.run();
+    h.click(9, true); await h.run();
+    const msg = h.state.chat[9];
+    msg.swipes = ['original', 'alternative'];
+    msg.swipe_info = [{ extra: {} }, { extra: { [AUTO]: true } }];
+    h.state.chat = clone(h.state.chat);
+    h.state.chat[9].extra = clone(h.state.chat[9].swipe_info[1].extra);
+    await h.run();
+    assert.equal(h.state.chat[9].is_system, true);
+    assert.deepEqual(h.state.chat[9].swipes, ['original', 'alternative']);
+    const before = clone(h.state.chat);
+    const saves = h.counters.saves;
+    await h.run();
+    assert.deepEqual(clone(h.state.chat), before);
+    assert.equal(h.counters.saves, saves);
+});
+
+test('built-in hide button records manual intent before new USER and AI generation', async () => {
+    for (const count of [0, 1, 10]) {
+        const h = harness(count);
+        await h.run();
+        if (count) { h.click(count - 1, false); await h.run(); }
+        await h.sandbox.showManualHideDialog(); await h.flush();
+        for (let i = Math.max(0, count - 2); i < count; i++) {
+            assert.equal(h.state.chat[i].extra[HIDE], true);
+        }
+        h.add(); await h.eventSource.emit('MESSAGE_SENT');
+        h.add(); await h.eventSource.emit('MESSAGE_RECEIVED'); await h.flush();
+        await h.eventSource.emit('GENERATION_ENDED'); await h.flush();
+        for (let i = Math.max(0, count - 2); i < count; i++) assert.equal(h.state.chat[i].is_system, true);
+        assert.equal(h.state.chat.at(-1).is_system, false);
+        if (count === 10) assert.deepEqual(h.visible(), [7, 8, 11, 12]);
+    }
+});
+
+test('newest neutral floor ignores stale swipe flags and ordinary replies stay visible', async () => {
+    const h = harness(10); await h.run();
+    h.state.chat[9].extra = { [HIDE]: true };
+    await h.eventSource.emit('MESSAGE_UPDATED'); await h.flush();
+    assert.equal(h.state.chat[9].is_system, false);
+    h.add(); await h.eventSource.emit('MESSAGE_SENT');
+    const last = h.add();
+    await h.eventSource.emit('MESSAGE_RECEIVED'); await h.flush();
+    await h.eventSource.emit('GENERATION_ENDED'); await h.flush();
+    assert.equal(last.is_system, false);
+    assert.deepEqual(h.visible(), [9, 10, 11, 12]);
+});
+
+test('single hide button: default 2, custom N, cancellation, invalid input and chat switch', async () => {
+    for (const answer of ['2', '5', '100', '', false, null, '0', '-2', '1.5', 'abc', 'switch', 'append']) {
+        const h = harness(10);
+        h.sandbox.callGenericPopup = async (title, type, value) => {
+            assert.equal(value, '2');
+            if (answer === 'switch') { h.state.chatId = 'b'; return '2'; }
+            if (answer === 'append') { h.add(); return '2'; }
+            return answer;
+        };
+        await h.sandbox.showManualHideDialog();
+        const hidden = floors(h.state.chat.filter(msg => msg.extra[HIDE]));
+        if (['2', '5', '100'].includes(answer)) {
+            assert.deepEqual(hidden, floors(h.state.chat.slice(-Number(answer))));
+        } else assert.deepEqual(hidden, []);
+    }
+});
+
+test('built-in dialog ignores duplicate clicks and works with auto hiding disabled', async () => {
+    const h = harness(10);
+    h.settings.autoHideEnabled = false;
+    let resolve, opened = 0;
+    h.sandbox.callGenericPopup = () => { opened++; return new Promise(done => { resolve = done; }); };
+    const pending = h.sandbox.showManualHideDialog();
+    await h.sandbox.showManualHideDialog();
+    assert.equal(opened, 1);
+    resolve('2'); await pending;
+    assert.deepEqual(h.visible(), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.ok(h.state.chat.slice(-2).every(msg => msg.extra[HIDE] === true));
 });

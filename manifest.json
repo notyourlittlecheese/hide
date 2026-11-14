@@ -7,6 +7,6 @@
     "generate_interceptor": "HideHelper_interceptGeneration",
     "css": "style.css",
     "author": "uhhhh15",
-    "version": "3.9.11",
+    "version": "3.9.12",
     "description": "高效批量隐藏/显示消息的工具"
 }
