@@ -1,4 +1,21 @@
-# Visibility fix: 3.9.14
+# Visibility fix: 3.9.15
+
+## 3.9.15 theme-compatible controls
+
+- Removed quick-button appearance overrides (including minimum width/height,
+  font, border, background and padding). Its native QR/menu classes now receive
+  the user's theme styles. Only touch gesture behavior is retained.
+- The supplied theme expands the QR bar only while send_textarea is focused.
+  Primary pointerdown now prevents default focus transfer, allowing a hold
+  without collapsing the bar. Keyboard activation remains available.
+- The quantity picker is mounted under body, outside any QR opacity/overflow
+  ancestors, and uses a manual popover where supported (fixed-position fallback
+  otherwise). It does not autofocus the numeric field. Cleanup removes it and
+  outside-click detection includes both button and detached picker.
+- 31 local tests pass. Added coverage for focus-preserving pointerdown, detached
+  picker interaction and cleanup. Real mobile theme/touch behavior is not
+  verified; the previous browser-launch limitation remains. Theme JSON and
+  chat visibility logic were not modified.
 
 ## 3.9.14 QR placement
 

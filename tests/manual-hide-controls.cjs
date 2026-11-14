@@ -14,6 +14,7 @@ function setup() {
             const event = { isPrimary: true, button: 0, pointerId: 1, clientX: 10, clientY: 10,
                 detail: 1, target: this, preventDefault() { this.prevented = true; }, ...fields };
             this.listeners.get(name)?.(event);
+            return event;
         }
         setAttribute(name, value) { this.attributes[name] = value; }
         hasAttribute(name) { return name in this.attributes; }
@@ -27,7 +28,9 @@ function setup() {
     const button = new Element(), picker = new Element(), input = new Element(), row = new Element();
     row.querySelector = selector => ({ '.hh-quick-button': button, '.hh-quick-picker': picker, input })[selector];
     row.contains = target => [button, picker, input, row].includes(target);
+    picker.contains = target => [picker, input].includes(target);
     const document = new Element(), window = new Element(), calls = [], timers = new Map();
+    document.body = { append(element) { element.parentElement = this; } };
     document.createElement = () => row;
     let timerId = 0, snapshot = 'a';
     const sandbox = { document, window, console,
@@ -63,6 +66,18 @@ test('tap hides two immediately; long press opens without input focus and suppre
     assert.equal(h.calls.at(-1).count, 6);
     h.button.emit('pointerdown'); h.button.emit('pointerup'); h.button.emit('click');
     assert.equal(h.calls.at(-1).count, 2);
+});
+
+test('press preserves textarea focus; picker is outside the collapsing QR and cleaned up', () => {
+    const h = setup();
+    assert.equal(h.picker.parentElement, h.document.body);
+    assert.equal(h.button.emit('pointerdown').prevented, true);
+    h.tick();
+    assert.equal(h.picker.hidden, false);
+    h.document.emit('pointerdown', { target: h.input });
+    assert.equal(h.picker.hidden, false);
+    h.destroy();
+    assert.equal(h.picker.removed, true);
 });
 
 test('drag and pointer cancellation never trigger hide or open picker', () => {

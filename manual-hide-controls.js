@@ -34,7 +34,7 @@ export function mountManualHideControls(anchor, { onHide, getSnapshot }) {
     row.id = 'hide-helper-quick-row';
     row.innerHTML = `
         <button type="button" class="hh-quick-button qr--button menu_button" aria-haspopup="dialog" aria-expanded="false" title="隐藏最近2楼；长按选择数量">隐藏楼层</button>
-        <section class="hh-quick-picker" role="dialog" aria-label="隐藏楼层" hidden>
+        <section id="hide-helper-quick-picker" class="hh-quick-picker" role="dialog" aria-label="隐藏楼层" popover="manual" hidden>
             <div class="hh-quick-heading"><span>隐藏最近楼层</span><button type="button" data-close title="关闭" aria-label="关闭"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
             <div class="hh-quick-presets">
                 <button type="button" data-count="1">1楼</button><button type="button" data-count="2">2楼</button>
@@ -51,9 +51,12 @@ export function mountManualHideControls(anchor, { onHide, getSnapshot }) {
     const button = row.querySelector('.hh-quick-button');
     const picker = row.querySelector('.hh-quick-picker');
     const input = row.querySelector('input');
+    // The theme may collapse or clip the QR bar as soon as input focus changes.
+    document.body.append(picker);
     let timer, press, suppressClick = false, snapshot;
     const cancelTimer = () => { clearTimeout(timer); timer = undefined; };
     const close = () => {
+        if (!picker.hidden && picker.hidePopover) picker.hidePopover();
         picker.hidden = true;
         button.setAttribute('aria-expanded', 'false');
         input.blur();
@@ -66,11 +69,7 @@ export function mountManualHideControls(anchor, { onHide, getSnapshot }) {
         input.value = '2';
         input.readOnly = true;
         picker.hidden = false;
-        if (row.getBoundingClientRect) {
-            const left = row.getBoundingClientRect().left;
-            const width = picker.getBoundingClientRect().width;
-            picker.style.left = Math.max(8 - left, Math.min(0, document.documentElement.clientWidth - 8 - left - width)) + 'px';
-        }
+        if (picker.showPopover) picker.showPopover();
         button.setAttribute('aria-expanded', 'true');
     };
     const apply = count => {
@@ -80,6 +79,7 @@ export function mountManualHideControls(anchor, { onHide, getSnapshot }) {
     };
     button.addEventListener('pointerdown', event => {
         if (!event.isPrimary || event.button !== 0) return;
+        event.preventDefault();
         cancelTimer();
         suppressClick = false;
         press = { id: event.pointerId, x: event.clientX, y: event.clientY };
@@ -143,7 +143,7 @@ export function mountManualHideControls(anchor, { onHide, getSnapshot }) {
         if (event.key === 'Enter') { event.preventDefault(); picker.querySelector('[data-confirm]').click(); }
     });
     input.addEventListener('input', () => input.setCustomValidity(''));
-    const outside = event => { if (!row.contains(event.target)) close(); };
+    const outside = event => { if (!row.contains(event.target) && !picker.contains(event.target)) close(); };
     const escape = event => { if (event.key === 'Escape') close(); };
     const blur = () => { suppressClick = true; endPress(); close(); };
     document.addEventListener('pointerdown', outside);
@@ -154,6 +154,8 @@ export function mountManualHideControls(anchor, { onHide, getSnapshot }) {
         document.removeEventListener('pointerdown', outside);
         document.removeEventListener('keydown', escape);
         window.removeEventListener('blur', blur);
+        close();
+        picker.remove();
         detach();
     };
 }
