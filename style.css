@@ -409,3 +409,59 @@
     color: var(--hh-text-primary) !important;
     transform: scale(1.1);
 }
+#hide-helper-quick-row {
+    position: relative;
+    display: flex;
+    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+    padding: 4px 8px;
+    box-sizing: border-box;
+    letter-spacing: 0;
+}
+#hide-helper-quick-row button {
+    appearance: none;
+    color: var(--SmartThemeBodyColor, #eee);
+    background: var(--SmartThemeBlurTintColor, #292929);
+    border: 1px solid var(--SmartThemeBorderColor, #777);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 14px;
+    line-height: 1.3;
+    min-height: 40px;
+    cursor: pointer;
+    white-space: nowrap;
+    padding: 6px 12px;
+}
+#hide-helper-quick-row .hh-quick-button {
+    width: auto;
+    flex: 0 0 auto;
+    min-width: 92px;
+    touch-action: pan-y;
+    user-select: none;
+    -webkit-touch-callout: none;
+}
+#hide-helper-quick-row .hh-quick-picker {
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 8px;
+    width: min(300px, calc(100% - 16px));
+    max-height: 65dvh;
+    overflow: auto;
+    z-index: 100;
+    box-sizing: border-box;
+    background: var(--SmartThemeBlurTintColor, #292929);
+    backdrop-filter: blur(16px);
+    color: var(--SmartThemeBodyColor, #eee);
+    border: 1px solid var(--SmartThemeBorderColor, #777);
+    border-radius: 8px;
+    padding: 10px;
+    box-shadow: 0 4px 16px #0003;
+}
+#hide-helper-quick-row .hh-quick-picker[hidden] { display: none; }
+#hide-helper-quick-row .hh-quick-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 15px; }
+#hide-helper-quick-row .hh-quick-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 8px 0; }
+#hide-helper-quick-row .hh-quick-stepper { display: grid; grid-template-columns: 40px minmax(40px, 1fr) 40px 64px; gap: 6px; }
+#hide-helper-quick-row .hh-quick-stepper button { padding: 6px; }
+#hide-helper-quick-row input { width: 100%; min-width: 0; box-sizing: border-box; text-align: center; font-size: 16px; margin: 0; }
+#hide-helper-quick-row button:focus-visible { outline: 2px solid var(--SmartThemeQuoteColor, #59bdb1); outline-offset: 2px; }

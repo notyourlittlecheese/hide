@@ -10,7 +10,7 @@ import { getTokenCountAsync } from "../../../tokenizers.js";
 import { promptManager } from "../../../openai.js";
 import { SlashCommandParser } from "../../../slash-commands/SlashCommandParser.js";
 import { stringToRange } from "../../../utils.js";
-import { callGenericPopup, POPUP_TYPE } from "../../../popup.js";
+import { mountManualHideControls } from "./manual-hide-controls.js";
 import { checkForUpdates, getChangelog, performUpdate, initUpdateCheck } from "./update.js";
 
 const extensionName = "hide";
@@ -632,6 +632,7 @@ function createUI() {
 }
 
 // 创建输入区旁的按钮
+let destroyManualHideControls = null;
 function createInputWandButton() {
     Logger.debug('创建输入区按钮');
     // 移除旧按钮，以防重复
@@ -644,12 +645,12 @@ function createInputWandButton() {
         </div>`;
     Logger.debug('追加按钮到 #data_bank_wand_container');
     $('#data_bank_wand_container').append(buttonHtml);
-    $('#data_bank_wand_container').append(`
-        <button id="hide-helper-manual-button" type="button" class="menu_button" title="手动隐藏最近楼层">
-            <i class="fa-solid fa-eye-slash" aria-hidden="true"></i>
-            <span>隐藏楼层</span>
-        </button>`);
-    $('#hide-helper-manual-button').on('click', showManualHideDialog);
+    destroyManualHideControls?.();
+    const sendForm = document.getElementById('send_form');
+    if (sendForm) destroyManualHideControls = mountManualHideControls(sendForm, {
+        onHide: hideRecentMessages,
+        getSnapshot: captureManualHideChat,
+    });
 }
 
 // index.js (部分)
@@ -1332,22 +1333,22 @@ function recordManualVisibility(msg, hidden, source = 'button') {
     return true;
 }
 
-let manualHideDialogOpen = false;
-async function showManualHideDialog() {
-    if (manualHideDialogOpen) return;
-    manualHideDialogOpen = true;
+function captureManualHideChat() {
+    const snapshot = captureHideChat();
+    return { ...snapshot, messages: snapshot.chat?.slice() || [] };
+}
+
+let manualHideBusy = false;
+async function hideRecentMessages(count = 2, snapshot = captureManualHideChat()) {
+    if (manualHideBusy) return;
+    manualHideBusy = true;
     try {
-        const snapshot = captureHideChat();
         if (!snapshot.chat?.length) {
             toastr.warning('没有消息可以隐藏');
             return;
         }
-        const messages = snapshot.chat.slice();
-        const result = await callGenericPopup('隐藏最近几楼？', POPUP_TYPE.INPUT, '2', { rows: 1, okButton: '隐藏' });
-        if (result === null || result === false || result === undefined || String(result).trim() === '') return;
-        const value = String(result).trim();
-        const count = Number(value);
-        if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(count)) {
+        const messages = snapshot.messages;
+        if (!Number.isSafeInteger(count) || count < 1) {
             toastr.warning('请输入大于 0 的整数');
             return;
         }
@@ -1367,7 +1368,7 @@ async function showManualHideDialog() {
         Logger.error('手动隐藏楼层失败', error);
         toastr.error('隐藏失败，请检查酒馆日志');
     } finally {
-        manualHideDialogOpen = false;
+        manualHideBusy = false;
     }
 }
 

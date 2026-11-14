@@ -57,7 +57,6 @@ function harness(count = 100, limit = 4) {
         return '';
     } };
     const sandbox = {
-        POPUP_TYPE: { INPUT: 'input' }, callGenericPopup: async () => '2',
         toastr: { warning() {}, success() {}, error() {} },
         performance, document, $, stringToRange, SlashCommandParser: { commands }, eventSource, event_types,
         Logger: { debug() {}, warn() {}, error() {} },
@@ -387,7 +386,7 @@ test('built-in hide button records manual intent before new USER and AI generati
         const h = harness(count);
         await h.run();
         if (count) { h.click(count - 1, false); await h.run(); }
-        await h.sandbox.showManualHideDialog(); await h.flush();
+        await h.sandbox.hideRecentMessages(); await h.flush();
         for (let i = Math.max(0, count - 2); i < count; i++) {
             assert.equal(h.state.chat[i].extra[HIDE], true);
         }
@@ -413,32 +412,106 @@ test('newest neutral floor ignores stale swipe flags and ordinary replies stay v
     assert.deepEqual(h.visible(), [9, 10, 11, 12]);
 });
 
-test('single hide button: default 2, custom N, cancellation, invalid input and chat switch', async () => {
-    for (const answer of ['2', '5', '100', '', false, null, '0', '-2', '1.5', 'abc', 'switch', 'append']) {
+test('quick hide: custom N, invalid input and stale chat snapshots', async () => {
+    for (const answer of [2, 5, 100, 0, -2, 1.5, NaN, 'switch', 'append']) {
         const h = harness(10);
-        h.sandbox.callGenericPopup = async (title, type, value) => {
-            assert.equal(value, '2');
-            if (answer === 'switch') { h.state.chatId = 'b'; return '2'; }
-            if (answer === 'append') { h.add(); return '2'; }
-            return answer;
-        };
-        await h.sandbox.showManualHideDialog();
+        const snapshot = h.sandbox.captureManualHideChat();
+        if (answer === 'switch') h.state.chatId = 'b';
+        if (answer === 'append') h.add();
+        await h.sandbox.hideRecentMessages(typeof answer === 'string' ? 2 : answer, snapshot);
         const hidden = floors(h.state.chat.filter(msg => msg.extra[HIDE]));
-        if (['2', '5', '100'].includes(answer)) {
+        if ([2, 5, 100].includes(answer)) {
             assert.deepEqual(hidden, floors(h.state.chat.slice(-Number(answer))));
         } else assert.deepEqual(hidden, []);
     }
 });
 
-test('built-in dialog ignores duplicate clicks and works with auto hiding disabled', async () => {
+test('quick hide ignores concurrent actions and works with auto hiding disabled', async () => {
     const h = harness(10);
-    h.settings.autoHideEnabled = false;
-    let resolve, opened = 0;
-    h.sandbox.callGenericPopup = () => { opened++; return new Promise(done => { resolve = done; }); };
-    const pending = h.sandbox.showManualHideDialog();
-    await h.sandbox.showManualHideDialog();
-    assert.equal(opened, 1);
-    resolve('2'); await pending;
+    h.settings.enabled = false;
+    const pending = h.sandbox.hideRecentMessages();
+    await h.sandbox.hideRecentMessages(5);
+    await pending;
     assert.deepEqual(h.visible(), [1, 2, 3, 4, 5, 6, 7, 8]);
     assert.ok(h.state.chat.slice(-2).every(msg => msg.extra[HIDE] === true));
+});
+
+test('quick hide never unhides manual floors to fill a short recent window', async () => {
+    for (const limit of [1, 4, 10]) {
+        const h = harness(limit + 2, limit);
+        await h.run();
+        await h.sandbox.hideRecentMessages(limit + 1);
+        await h.flush();
+        assert.deepEqual(h.visible(), [1]);
+        h.state.chat = clone(h.state.chat);
+        await h.eventSource.emit('CHAT_CHANGED');
+        await h.flush();
+        assert.deepEqual(h.visible(), [1]);
+        await h.sandbox.hideRecentMessages(limit + 2);
+        await h.flush();
+        assert.deepEqual(h.visible(), []);
+        const reply = h.add();
+        await h.eventSource.emit('MESSAGE_RECEIVED');
+        await h.eventSource.emit('GENERATION_ENDED');
+        await h.flush();
+        assert.deepEqual(h.visible(), [reply.floor]);
+        assert.ok(h.state.chat.slice(0, -1).every(msg => msg.is_system && msg.extra[HIDE]));
+    }
+});
+
+test('quick hide pairs through floor 200 preserve the eligible window and explicit shows', async () => {
+    const h = harness(120);
+    await h.run();
+    for (let floor = 121; floor < 200; floor += 2) {
+        h.add(); await h.eventSource.emit('MESSAGE_SENT');
+        h.add(); await h.eventSource.emit('MESSAGE_RECEIVED');
+        await h.sandbox.hideRecentMessages();
+        await h.eventSource.emit('GENERATION_ENDED'); await h.flush();
+        assert.deepEqual(h.visible(), [117, 118, 119, 120]);
+    }
+    h.click(99, false); await h.run();
+    assert.deepEqual(h.visible(), [100, 117, 118, 119, 120]);
+    const last = h.state.chat.at(-1);
+    last.extra = {};
+    last.mes += ' continued';
+    await h.eventSource.emit('MESSAGE_SWIPED', 199);
+    await h.eventSource.emit('GENERATION_ENDED'); await h.flush();
+    assert.equal(last.is_system, true);
+    assert.equal(last.extra[HIDE], true);
+    assert.deepEqual(h.visible(), [100, 117, 118, 119, 120]);
+    const before = clone(h.state.chat), saves = h.counters.saves;
+    await h.run();
+    assert.deepEqual(clone(h.state.chat), before);
+    assert.equal(h.counters.saves, saves);
+});
+
+test('native-style regenerate retries, missing is_system on AI creation, and Continue', async () => {
+    for (const limit of [1, 4, 10]) {
+        const h = harness(20, limit);
+        await h.run();
+        for (let attempt = 0; attempt < 6; attempt++) {
+            await h.eventSource.emit('GENERATION_AFTER_COMMANDS', 'regenerate', {}, false);
+            h.state.chat.pop();
+            await h.eventSource.emit('MESSAGE_DELETED');
+            await h.flush();
+            // Native saveReply creates an object without an is_system property.
+            const reply = { floor: 20, is_user: false, mes: 'retry ' + attempt, extra: {} };
+            h.state.chat.push(reply);
+            await h.eventSource.emit('MESSAGE_RECEIVED', 19, 'normal');
+            await h.flush();
+            await h.eventSource.emit('GENERATION_ENDED');
+            await h.flush();
+            assert.notEqual(reply.is_system, true);
+            assert.equal(reply.extra[HIDE], undefined);
+            assert.equal(h.visible().length, limit);
+            await h.eventSource.emit('GENERATION_AFTER_COMMANDS', 'continue', {}, false);
+            reply.mes += ' continued';
+            await h.eventSource.emit('MESSAGE_RECEIVED', 19, 'appendFinal');
+            await h.eventSource.emit('GENERATION_ENDED');
+            await h.flush();
+            assert.notEqual(reply.is_system, true);
+            assert.equal(reply.extra[HIDE], undefined);
+            assert.equal(h.visible().length, limit);
+        }
+    }
 });

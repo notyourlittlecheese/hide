@@ -1,4 +1,42 @@
-# Visibility fix: 3.9.12 (local review)
+# Visibility fix: 3.9.13 (local review)
+
+## 3.9.13 quick-button interaction
+
+- The plugin-owned 隐藏楼层 button now lives in its own quick-action row directly
+  above the chat input form. The old manual action is removed from the wand menu;
+  the existing Hide Helper settings entry remains.
+- Tap immediately hides the last two message IDs. Hold for 500ms opens a small
+  picker with 1/2/4/6 presets, minus/plus, and confirm. Only explicitly tapping
+  the numeric field enables text entry. Each opening defaults to two; custom
+  counts do not change the next tap's behavior.
+- Long-press release cannot also trigger tap. Movement over 12px, pointer cancel,
+  window blur, outside tap and Escape cancel the relevant interaction.
+- All actions use the same manual-ownership function and snapshot guards as the
+  previous fixes. No separate QR/script import or input popup is needed.
+- Verification: 26 model tests plus 3 event-controller tests pass:
+  node --test tests/visibility.cjs tests/manual-hide-controls.cjs
+- A Playwright mobile/desktop interaction and screenshot test is included at
+  tests/manual-hide-ui.cjs (requires playwright; HH_TEST_BROWSER can specify a
+  Chromium executable, HH_TEST_SCREENSHOTS an optional output directory).
+  The local Edge process failed to launch in this environment, so browser
+  screenshots and real-device layout have NOT been verified.
+- Added native-style regenerate/Continue retries for N=1/4/10, including newly
+  created AI messages with no is_system field. These simulations pass, but the
+  original hidden-after-regenerate transition was not reproduced.
+- The supplied JSONL's final message had is_system=true, helper mode=none,
+  and bbs_omit/bbs_omit_hidden=true. The user's ST-BaiBai-Book fork explicitly
+  hides omitted floors in setFloorOmit/setFloorsOmit and its hiding pass.
+  This identifies a compatible external hiding path, not proof of how the
+  latest message acquired the omit flag. The user reports changing that plugin.
+  No private chat text is included in this repository or its tests.
+- Regression tests now exercise the built-in action through floors 121-200,
+  a window with fewer than N eligible messages, hiding every floor, reload,
+  refill by new messages, extra replacement and independent historical shows.
+  Manual hides never fill the quota; N is a recent eligible-message window,
+  not a required minimum visible count. No historical flags are cleared.
+- Existing unexplained external hides remain conservative. Reapplying the
+  built-in action records explicit intent for its selected latest IDs, but does
+  not retroactively classify every historical external hide as manual.
 
 ## 3.9.12 follow-up
 
