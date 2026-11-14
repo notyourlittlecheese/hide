@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const root = path.join(__dirname, '..');
-const code = fs.readFileSync(path.join(root, 'manual-hide-controls.js'), 'utf8').replace('export function', 'function');
+const code = fs.readFileSync(path.join(root, 'manual-hide-controls.js'), 'utf8').replaceAll('export function', 'function');
 const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
 
 (async () => {
@@ -19,7 +19,8 @@ const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
             await page.setContent(`<!doctype html><meta charset="utf-8">
                 <style>body{margin:0;font:16px sans-serif;background:#eee;color:#222}
                 #form_sheld{position:fixed;bottom:0;width:100%;background:white}
-                #send_form{display:flex;padding:8px}textarea{width:100%;height:54px}
+                #send_form{display:flex;flex-direction:column;padding:8px}textarea{width:100%;height:54px;box-sizing:border-box}
+                #qr--bar,.qr--buttons{display:flex;gap:5px;flex-wrap:wrap;width:100%}
                 :root{--SmartThemeBodyColor:#222;--SmartThemeBlurTintColor:#fff;--SmartThemeBorderColor:#bbb}
                 .fa-xmark:before{content:"×"}.fa-minus:before{content:"−"}.fa-plus:before{content:"+"}
                 </style><main style="padding:16px">聊天内容</main><div id="form_sheld"><form id="send_form"><textarea aria-label="消息"></textarea></form></div>`);
@@ -35,6 +36,17 @@ const css = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
             }, code);
             const button = page.locator('.hh-quick-button');
             const panel = page.locator('.hh-quick-picker');
+            assert.equal(await page.locator('#send_form #qr--bar .hh-quick-button').count(), 1);
+            await page.evaluate(() => {
+                const bar = document.createElement('div');
+                bar.id = 'qr--bar';
+                bar.innerHTML = '<div class="qr--buttons"><button>Existing QR</button></div>';
+                document.getElementById('send_form').prepend(bar);
+            });
+            await page.waitForFunction(() => document.querySelectorAll('#qr--bar').length === 1
+                && document.querySelector('.qr--buttons .hh-quick-button'));
+            await page.evaluate(() => document.querySelector('.qr--buttons').remove());
+            await page.waitForFunction(() => document.querySelector('#qr--bar > #hide-helper-quick-row'));
             await button.tap();
             assert.deepEqual(await page.evaluate(() => calls.map(call => call.count)), [2]);
             assert.equal(await panel.isVisible(), false);

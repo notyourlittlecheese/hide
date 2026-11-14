@@ -1,8 +1,39 @@
+export function attachQuickRow(row, anchor) {
+    const root = anchor.parentElement;
+    let fallback;
+    const place = () => {
+        const form = root.querySelector('#send_form');
+        if (!form) return;
+        const bar = Array.from(form.querySelectorAll('[id="qr--bar"]')).find(node => node !== fallback);
+        let target = bar?.querySelector('.qr--buttons') || bar;
+        if (!target) {
+            if (!fallback) {
+                fallback = document.createElement('div');
+                fallback.id = 'qr--bar';
+                fallback.className = 'hide-helper-qr-bar flex-container flexGap5';
+            }
+            if (fallback.parentElement !== form) form.prepend(fallback);
+            target = fallback;
+        }
+        if (row.parentElement !== target) target.append(row);
+        // Other plugins can adopt our fallback bar, so never remove their buttons.
+        if (bar && fallback?.isConnected && !fallback.children.length) fallback.remove();
+    };
+    place();
+    const observer = new MutationObserver(place);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => {
+        observer.disconnect();
+        row.remove();
+        if (fallback?.isConnected && !fallback.children.length) fallback.remove();
+    };
+}
+
 export function mountManualHideControls(anchor, { onHide, getSnapshot }) {
     const row = document.createElement('div');
     row.id = 'hide-helper-quick-row';
     row.innerHTML = `
-        <button type="button" class="hh-quick-button" aria-haspopup="dialog" aria-expanded="false" title="隐藏最近2楼；长按选择数量">隐藏楼层</button>
+        <button type="button" class="hh-quick-button qr--button menu_button" aria-haspopup="dialog" aria-expanded="false" title="隐藏最近2楼；长按选择数量">隐藏楼层</button>
         <section class="hh-quick-picker" role="dialog" aria-label="隐藏楼层" hidden>
             <div class="hh-quick-heading"><span>隐藏最近楼层</span><button type="button" data-close title="关闭" aria-label="关闭"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
             <div class="hh-quick-presets">
@@ -16,7 +47,7 @@ export function mountManualHideControls(anchor, { onHide, getSnapshot }) {
                 <button type="button" data-confirm>隐藏</button>
             </div>
         </section>`;
-    anchor.before(row);
+    const detach = attachQuickRow(row, anchor);
     const button = row.querySelector('.hh-quick-button');
     const picker = row.querySelector('.hh-quick-picker');
     const input = row.querySelector('input');
@@ -35,6 +66,11 @@ export function mountManualHideControls(anchor, { onHide, getSnapshot }) {
         input.value = '2';
         input.readOnly = true;
         picker.hidden = false;
+        if (row.getBoundingClientRect) {
+            const left = row.getBoundingClientRect().left;
+            const width = picker.getBoundingClientRect().width;
+            picker.style.left = Math.max(8 - left, Math.min(0, document.documentElement.clientWidth - 8 - left - width)) + 'px';
+        }
         button.setAttribute('aria-expanded', 'true');
     };
     const apply = count => {
@@ -118,6 +154,6 @@ export function mountManualHideControls(anchor, { onHide, getSnapshot }) {
         document.removeEventListener('pointerdown', outside);
         document.removeEventListener('keydown', escape);
         window.removeEventListener('blur', blur);
-        row.remove();
+        detach();
     };
 }

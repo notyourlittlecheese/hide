@@ -1,4 +1,24 @@
-# Visibility fix: 3.9.13 (local review)
+# Visibility fix: 3.9.14
+
+## 3.9.14 QR placement
+
+- The previous control was inserted before send_form, outside the actual QR
+  surface, and mounted only once. It could be obscured by an input-form theme
+  or lost when the input surface was replaced.
+- The supplied stage script declares Tavern Helper script buttons. Its host
+  places them inside send_form's qr--bar (or a combined qr--buttons group):
+  https://github.com/N0VI028/JS-Slash-Runner/blob/main/src/panel/script/use_button_destination_element.ts
+- Hide now joins that same existing QR surface, with its own direct manual-hide
+  handler and long-press picker. No script import or QR configuration is needed.
+  A fallback QR bar is created only when no bar exists; other plugins' controls
+  are never removed. An input-shell-only DOM observer repairs placement after
+  QR/group/form replacement, without scheduling visibility checks or chat saves.
+- Added mounting regression coverage for late QR creation, combined groups,
+  repeated reconciliation, removal, form replacement and cleanup. All 30 local
+  model/controller/mounting tests pass. Browser tests now assert QR placement
+  and rebuilding, but Edge again failed during launch (crashpad pipe error);
+  actual mobile theme appearance remains unverified.
+- Visibility ownership and existing historical flags are unchanged.
 
 ## 3.9.13 quick-button interaction
 

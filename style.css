@@ -413,9 +413,9 @@
     position: relative;
     display: flex;
     flex: 0 0 auto;
-    width: 100%;
+    width: auto;
     min-width: 0;
-    padding: 4px 8px;
+    padding: 0;
     box-sizing: border-box;
     letter-spacing: 0;
 }
@@ -444,8 +444,8 @@
 #hide-helper-quick-row .hh-quick-picker {
     position: absolute;
     bottom: calc(100% + 4px);
-    left: 8px;
-    width: min(300px, calc(100% - 16px));
+    left: 0;
+    width: min(300px, calc(100vw - 24px));
     max-height: 65dvh;
     overflow: auto;
     z-index: 100;

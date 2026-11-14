@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
-const code = fs.readFileSync(path.join(__dirname, '../manual-hide-controls.js'), 'utf8').replace('export function', 'function');
+const code = fs.readFileSync(path.join(__dirname, '../manual-hide-controls.js'), 'utf8').replaceAll('export function', 'function');
 
 function setup() {
     class Element {
@@ -35,6 +35,7 @@ function setup() {
         clearTimeout: id => timers.delete(id) };
     vm.createContext(sandbox);
     vm.runInContext(code, sandbox);
+    sandbox.attachQuickRow = () => () => row.remove();
     const destroy = sandbox.mountManualHideControls({ before() {} }, {
         onHide: (count, target) => calls.push({ count, target }), getSnapshot: () => snapshot,
     });
